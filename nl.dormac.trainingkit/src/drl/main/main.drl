@@ -1,0 +1,4008 @@
+import json
+import math
+import sys
+
+set_singularity_handling(mode=DR_VAR_VEL)
+set_ref_coord(DR_BASE)
+
+# region global variables
+# SERIAL
+
+# Provide the serial for the cobot. When `DEBUG.CHECK_SERIAL` is set
+# to `False` the serial is ignored.
+sys.setrecursionlimit(1500)
+
+ROBOT_SERIAL = get_robot_serial_num()
+
+se = "9CHX"
+ri = "M-6Y"
+al = "3101"
+serialCode = se[::-1] + ri[::-1] + al[::-1]
+
+# CONFIG VARIABLES
+
+# These variables control the process of machine tending.
+#
+# When `DEBUG.LOAD_CONFIG_FROM_JSON` is set to `True` the
+# configuration is provided by React / the app / UI.
+#
+# Alternatively when `DEBUG.LOAD_CONFIG_FROM_JSON` is set to `False`
+# the machine tending process will run with the initial values. This
+# allows you to simply run the program without needing the React UI.
+# This allows for us developers to more easily test / develop the
+# application without having to constantly wait for the UI to be
+# build.
+#
+# IMPORTANT: if you add variables and make sure you also load them
+# from the JSON in the `LOAD CONFIG ROUTINE`!
+
+# Which program to run has two options:
+#
+# 1. "MAIN" which runs the meta tending program. The Cobot will
+#     be responsible for tending a CNC machine and will, based on
+#     the configuration, perform input and output, only input, or
+#     only output.
+#
+# 2. "REACH" which runs the reach validation program. All the
+#     positions that the Cobot might reach for on the drawer are
+#     tested to see if they can be reached. Note that the Cobot does
+#     not need to physically move in order to be able to test this.
+#
+# The reason the "REACH" program is not in its own file is because
+# this would require us to have a lot of code duplication regarding
+# the calculation of the pickup / place positions. It would also be
+# to easy to forget to update both files when things change!
+PROGRAM_MODE = "MAIN"
+REACH_DRAWER = "MAIN"  # or SECOND to reach test the second drawer
+
+FEEDER_TYPE = "EASY_LOADER"
+HAS_SECOND_GRIPPER = True
+MACHINE_TYPE = "LATHE"
+MACHINE_HAS_SUB_SPINDLE = False
+
+GRID_TYPE = "STATIC"
+X_OFFSET_ORIGIN = 0
+Y_OFFSET_ORIGIN = 0
+Z_OFFSET_ORIGIN = 0
+GRID_X_OFFSET = 140
+GRID_Y_OFFSET = 144
+X_FIRST_SPOT = 0
+Y_FIRST_SPOT = 0
+POSITIONING_PIN_DIAMETER = 8
+DISTANCE_POSITIONING_PINS = 75
+POS_POSPIN1_X = 50
+POS_POSPIN1_Y = 0
+EQUAL_GRID = True
+
+TOTAL_AMOUNT_PRODUCT_DRAWER = 28
+DRAWER_AMOUNT_PRODUCT_X = 7
+DRAWER_AMOUNT_PRODUCT_Y = 4
+DRAWER_AMOUNT_PRODUCT_Z = 1
+
+
+# Which spots can be reached (True) and which spots cannot (False)
+SPOT_STATUS = [
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+]
+
+GR1_CLAW_DEPTH = 35
+GR1_CLAW_HEIGHT = 35
+GR2_CLAW_DEPTH = 35
+GR2_CLAW_HEIGHT = 35
+
+MAIN_CLAW_HEIGHT = 76
+MAIN_CLAW_DEPTH = 66
+
+SUB_CLAW_HEIGHT = 76
+SUB_CLAW_DEPTH = 66
+
+DRAWER_PICK_OFFSET_X = 0
+DRAWER_PICK_OFFSET_Y = 0
+DRAWER_PICK_OFFSET_Z = 0
+DRAWER_PLACE_OFFSET_X = 0
+DRAWER_PLACE_OFFSET_Y = 0
+DRAWER_PLACE_OFFSET_Z = 0
+
+# Pretend that product is 2mm bigger so cobot will always offset the tool a little bit from the edge
+DRAWER_CORNER_OFFSET = 2
+
+
+MACHINE_PICK_HEIGHT_OFFSET = 0
+MACHINE_PICK_DEPTH_OFFSET = 0
+MACHINE_PLACE_HEIGHT_OFFSET = 2
+MACHINE_PLACE_DEPTH_OFFSET = 0
+
+TEACH_CONFIG_MAIN_CLAW_PRODUCT_HEIGHT = 93
+TEACH_CONFIG_MAIN_CLAW_PRODUCT_WIDTH = 64
+TEACH_CONFIG_MAIN_CLAW_PRODUCT_LENGTH = 64
+TEACH_CONFIG_SUB_CLAW_PRODUCT_HEIGHT = 93
+TEACH_CONFIG_SUB_CLAW_PRODUCT_WIDTH = 64
+TEACH_CONFIG_SUB_CLAW_PRODUCT_LENGTH = 64
+
+TEACH_CONFIG_PLACE_SPINDLE_HEIGHT = 76
+TEACH_CONFIG_PLACE_SPINDLE_DEPTH = 66
+
+TEACH_CONFIG_GR_RAW_HEIGHT = 35
+TEACH_CONFIG_GR_RAW_DEPTH = 35
+TEACH_CONFIG_PICK_SPINDLE_HEIGHT = 76
+TEACH_CONFIG_PICK_SPINDLE_DEPTH = 66
+TEACH_CONFIG_GR_FINISHED_HEIGHT = 35
+TEACH_CONFIG_GR_FINISHED_DEPTH = 35
+
+AIRPURGE_MAIN_CLAW_POSITION_ANGLE = 0
+AIRPURGE_MAIN_CLAW_POSITION_DISTANCE = 50
+AIRPURGE_SUB_CLAW_POSITION_ANGLE = 0
+AIRPURGE_SUB_CLAW_POSITION_DISTANCE = 50
+
+DRAWER_LEFT_FRONT_TEACH_POSITION = [
+    974.79, -445.73, 119.98, 179.59, -0.62, 89.00]
+DRAWER_RIGHT_FRONT_TEACH_POSITION = [
+    973.75, 391.46, 120.25, -179.91, -0.94, 83.37]
+DRAWER_LEFT_BACK_TEACH_POSITION = [
+    400.32, -445.64, 118.45, 179.86, 0.02, 90.14]
+DRAWER_RIGHT_BACK_TEACH_POSITION = [
+    398.66, 390.64, 118.09, -179.77, -0.42, 90.63]
+
+# Process flow
+IO_MODE = "INPUT_OUTPUT"
+STEPPED_AXIS = False
+USE_SUB_SPINDLE = False
+USE_SECOND_GRIPPER = True
+ROUND_PRODUCT = True
+PUSH_AFTER_PLACE = False
+PUSH_GRIPPER_CLOSED = False
+FORCE_FEEDING_NEWTON = 20
+FORCE_PUSHING_NEWTON = 20
+FORCE_INFEED = False
+CLEAN_PRODUCT = False
+AIRPURGE_BEFORE_INFEED = False
+AIRPURGE_BEFORE_OUTFEED = False
+AIRPURGE_AFTER_OUTFEED = False
+
+# Raw material
+RAW_MAT_HEIGHT = 93
+RAW_MAT_LENGTH = 64
+RAW_MAT_WIDTH = 64
+RAW_MAT_DIAMETER = 64
+RAW_MAT_WEIGHT = 0.8
+
+# Finished product
+FIN_PRODUCT_HEIGHT = 93
+FIN_PRODUCT_LENGTH = 64
+FIN_PRODUCT_WIDTH = 64
+FIN_PRODUCT_DIAMETER = 64
+FIN_PRODUCT_WEIGHT = 0.8
+FIN_BOTTOM_OFFSET = 0
+FIN_TOP_OFFSET = 0
+
+TOTAL_AMOUNT_PRODUCTS = 4
+TOOL_WEIGHT = 4.13
+
+# Positions
+
+PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_CLEAN_PRODUCT = [[0, 0, 90, 0, 90, 0]]
+CLEAN_PRODUCT_POSITION = [180, 130.53, 537.55, 180, 180, 45]
+
+# When MACHINE_TYPE is GRID these will be the selected positions from the product config
+MAIN_CLAW_POSITION = [230, 130.53, 537.55, 180, 180, 45]
+SUB_CLAW_POSITION = [10, 130.53, 537.55, 180, 180, 45]
+
+AIRPURGE_BEFORE_INFEED_POSITION = [559, 130.53, 537.55, 180, 180, 45]
+PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_BEFORE_INFEED = [
+    [0, 0, 90, 0, 90, 0]]
+
+AIRPURGE_BEFORE_OUTFEED_POSITION = [559, 130.53, 537.55, 180, 180, 45]
+PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_BEFORE_OUTFEED = [
+    [0, 0, 90, 0, 90, 0]]
+
+AIRPURGE_AFTER_OUTFEED_POSITION = [559, 130.53, 537.55, 180, 180, 45]
+PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_AFTER_OUTFEED = [
+    [0, 0, 90, 0, 90, 0]]
+
+PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_PLACE = [[0, 0, 90, 0, 90, 0]]
+PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_PICK = [[0, 0, 90, 0, 90, 0]]
+PATH_FROM_DRAWER_TO_OUTSIDE_MACHINE_DOOR = [[0, 0, 90, 0, 90, 0]]
+
+GRIPPER1_AT_DRAWER_POSITION = [0, 0, 126.56, 0, 7.85, 90]
+GRIPPER2_AT_DRAWER_POSITION = [0, 0, 126.56, 0, 7.85, -90]
+
+HOME_POSITION = [0, 0, 90, 0, 90, 0]
+
+MAX_AMOUNT_PRODUCT_ON_SECOND_DRAWER = 6
+
+PATH_FROM_SECOND_DRAWER_TO_OUTSIDE_MACHINE_DOOR = [[0, 0, 90, 0, 90, 0]]
+PLACE_FINISHED_PRODUCT_ON_SECOND_DRAWER = False
+SECOND_DRAWER_AMOUNT_PRODUCT_X = 3
+SECOND_DRAWER_AMOUNT_PRODUCT_Y = 2
+SECOND_DRAWER_AMOUNT_PRODUCT_Z = 1
+# Which spots can be reached (True) and which spots cannot (False)
+SECOND_DRAWER_SPOT_STATUS = [
+    True,
+    True,
+    True,
+    True,
+    True,
+    True,
+]
+
+GRIPPER1_AT_SECOND_DRAWER_POSITION = [0, 0, 90, 0, 90, 0]
+GRIPPER2_AT_SECOND_DRAWER_POSITION = [0, 0, 90, 0, 90, 0]
+
+# Made these the same as the first drawer, so the machine
+SECOND_DRAWER_LEFT_FRONT_TEACH_POSITION = [
+    1031.422,
+    -422.576,
+    166.981,
+    29.37,
+    179.91,
+    0.14,
+]
+SECOND_DRAWER_LEFT_BACK_TEACH_POSITION = [
+    1032.311,
+    387.519,
+    165.932,
+    30.20,
+    -179.98,
+    0.32,
+]
+SECOND_DRAWER_RIGHT_FRONT_TEACH_POSITION = [
+    425.104,
+    -420.180,
+    166.732,
+    29.71,
+    -179.47,
+    0.21,
+]
+SECOND_DRAWER_RIGHT_BACK_TEACH_POSITION = [
+    425.389,
+    387.404,
+    165.473,
+    30.37,
+    -179.86,
+    0.19,
+]
+
+PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION = False
+DROP_OFF_POSITION = [559, 130.53, 537.55, 180, 180, 45]
+PATH_FROM_DROP_OFF_POSITION_TO_OUTSIDE_MACHINE_DOOR = [[0, 0, 0, 0, 0, 0]]
+
+# Start variables
+NORMAL_START = True
+AMOUNT_ALREADY_PRODUCED = 0
+MACHINE_CONTAINS_PRODUCT = False
+USE_CURRENT_DRAWER = False
+PREVIOUS_STATE = {}
+
+# Cobot settings
+TOOL_WEIGHT_NAME = "Tool_Weight"
+GRIPPER_1_TCP = "Gripper_1"
+GRIPPER_2_TCP = "Gripper_2"
+AIR_PURGE_TCP = "Air_Purge"
+
+# ALIASES / CONSTANTS
+EMPTY = 0
+RAW = 1
+FINISHED = 2
+
+CONFIGURE_MACHINE_PHASE = 0
+EXIT_PROGRAM_PHASE = 1
+DETERMINE_START_PHASE = 2
+PICK_RAW_MATERIAL_FROM_DRAWER_PHASE = 3
+PLACE_RAW_MATERIAL_IN_MACHINE_PHASE = 4
+PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE = 5
+PLACE_FINISHED_PRODUCT_ON_DRAWER_PHASE = 6
+PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION_PHASE = 7
+REACH_TEST_PHASE = 8
+
+TWO_SPINDLES_TWO_GRIPPERS = "TWO_SPINDLES_TWO_GRIPPERS"
+ONE_SPINDLE_TWO_GRIPPERS = "ONE_SPINDLE_TWO_GRIPPERS"
+TWO_SPINDLES_ONE_GRIPPER = "TWO_SPINDLES_ONE_GRIPPER"
+ONE_SPINDLE_ONE_GRIPPER = "ONE_SPINDLE_ONE_GRIPPER"
+
+INPUT_OUTPUT = "INPUT_OUTPUT"
+INPUT = "INPUT"
+OUTPUT = "OUTPUT"
+
+STATIC = "STATIC"
+PINNED = "PINNED"
+
+EASY_LOADER = "EASY_LOADER"
+META_LOADER = "META_LOADER"
+PRO_FEEDER = "PRO_FEEDER"
+
+# Jacco: second drawer currently uses base, but I'd rather use an actual coordinate system later.
+SECOND_DRAWER_COORDINATE_SYSTEM = DR_BASE
+
+# JACCO: We are going to use a user coordinate system here.
+# number of the coordinate system for the (first/pick) drawer.
+DRAWER_COORDINATE_SYSTEM = 101
+
+# DEBUG configuration
+
+# Environment is either test, when running unit test, or production
+# when running from the React app or from the code editor / task editor
+ENVIRONMENT = "production"
+
+GRIPPER_WAIT_DEFAULT = 0.5  # time (s) we wait for the gripper to open/close
+CLAW_WAIT_DEFAULT = 0.5  # time (s) we wait for the machineclaw to open/close
+
+# INPUT / OUTPUT
+
+
+class DigitalOutput:
+    def __init__(self, io_type, index):
+        # Either 'controller' or 'flange'
+        self.type = io_type
+        self.index = index
+
+    def set(self, val, time=None, val2=None):
+        if self.type == "controller":
+            set_digital_output(self.index, val, time, val2)
+        else:
+            set_tool_digital_output(self.index, val, time, val2)
+
+
+class DigitalInput:
+    def __init__(self, io_type, index):
+        # Either 'controller' or 'flange'
+        self.type = io_type
+        self.index = index
+
+    def get(self):
+        if self.type == "controller":
+            return get_digital_input(self.index)
+        else:
+            return get_tool_digital_input(self.index)
+
+    def waitInput(self, val):
+
+        if self.type == "controller":
+            tp_log(">> wait_digital_input(" + str(self.index) + ")")
+            wait_digital_input(self.index, val)
+        else:
+            tp_log(">> wait_tool_digital_input(" + str(self.index) + ")")
+            wait_tool_digital_input(self.index, val)
+
+
+# Controller Digital Output | Flange Digital Output
+DO_GRIPPER1_OPEN = DigitalOutput("controller", 1)
+DO_GRIPPER1_CLOSE = DigitalOutput("controller", 2)
+DO_GRIPPER2_OPEN = DigitalOutput("controller", 3)
+DO_GRIPPER2_CLOSE = DigitalOutput("controller", 4)
+DO_AIRPURGE = DigitalOutput("controller", 5)
+DO_MAIN_SPINDLE_OPEN = DigitalOutput("controller", 6)
+DO_MAIN_SPINDLE_CLOSE = DigitalOutput("controller", 7)
+DO_SUB_SPINDLE_OPEN = DigitalOutput("controller", 8)
+DO_SUB_SPINDLE_CLOSE = DigitalOutput("controller", 9)
+DO_REQUEST_NEW_DRAWER = DigitalOutput("controller", 10)
+DO_RUN_MACHINE = DigitalOutput("controller", 12)
+DO_SEND_ALERT = DigitalOutput("controller", 13)
+
+# Controller Digital Input | Flange Digital Input
+DI_GRIPPER1_IS_OPENED = DigitalInput("controller", 1)
+DI_GRIPPER1_IS_CLOSED = DigitalInput("controller", 2)
+DI_GRIPPER2_IS_OPENED = DigitalInput("controller", 3)
+DI_GRIPPER2_IS_CLOSED = DigitalInput("controller", 4)
+DI_DOOR_IS_OPENED = DigitalInput("controller", 5)
+DI_MAIN_SPINDLE_IS_OPENED = DigitalInput("controller", 6)
+DI_MAIN_SPINDLE_IS_CLOSED = DigitalInput("controller", 7)
+DI_SUB_SPINDLE_IS_OPENED = DigitalInput("controller", 8)
+DI_SUB_SPINDLE_IS_CLOSED = DigitalInput("controller", 9)
+DI_NEW_DRAWER_IS_REQUESTED = DigitalInput("controller", 10)
+DI_COBOT_IS_CALLED = DigitalInput("controller", 12)
+
+
+class Debug:
+    # When True loads the configuration variables from JSON / React, when
+    # False the initial values are used
+    LOAD_CONFIG_FROM_JSON = True
+
+    # When True the cobot moves when movej and movel are called. When False
+    # the Cobot does not actually move anything
+    REAL_MOTION = True
+
+    # When True the cobot wait when wait() commands are given, when False
+    # waits are ignored.
+    WAIT = True
+
+    # When True the serial is checked, when False the serial is not checked
+    CHECK_SERIAL = True
+
+    # When True PickRawMaterialFromDrawer / PickFinishedProductFromMachine
+    # checks if it is holding something, when False the pickup will never
+    # fail and the program continues.
+    CHECK_IF_COBOT_HAS_FEEDBACK_ON_PICK = True
+
+    # When True whenever one of the grippers is opened it waits for
+    # the corresponding DigitalInput's `wait()` until the open signal
+    # is given. When False it waits for the GRIPPER_WAIT_DEFAULT amount
+    # of time.
+    WAIT_FOR_DI_GRIPPER_OPENED = True
+
+    # When True the cobot waits for machine to send a digital output,
+    # when False the program does not wait for the machine.
+    WAIT_FOR_COBOT_IS_CALLED = True
+
+    # When True when `machine.run` is called we set the DO_RUN_MACHINE output,
+    # when False the program does not set the DO_RUN_MACHINE.
+    RUN_MACHINE = True
+
+    # When True the cobot waits for the machine door to send a digital output,
+    # when False the program does not wait for the door to open.
+    WAIT_FOR_DOOR_DIGITAL_INPUT = True
+
+    # When True whenever the main jaw of the CNC machine is opened the
+    # program waits for the digital signal telling that the jaw is actually
+    # opened. When False the program does not wait and continues.
+    WAIT_OPEN_MAIN_JAW_DIGITAL_INPUT = True
+
+    # When True whenever the sub jaw of the CNC machine is opened the
+    # program waits for the digital signal telling that the jaw is actually
+    # opened. When False the program does not wait and continues.
+    WAIT_OPEN_SUB_JAW_DIGITAL_INPUT = True
+
+    # When True whenever the main jaw of the CNC machine is closed the
+    # program waits for the digital signal telling that the jaw is actually
+    # closed. When False the program does not wait and continues.
+    WAIT_CLOSE_MAIN_JAW_DIGITAL_INPUT = True
+
+    # When True whenever the sub jaw of the CNC machine is closed the
+    # program waits for the digital signal telling that the jaw is actually
+    # closed. When False the program does not wait and continues.
+    WAIT_CLOSE_SUB_JAW_DIGITAL_INPUT = True
+
+    # When True whenever a new drawer is requested from a MetaLoader
+    # the program waits for the digital signal telling that a drawer has
+    # arrived. When False the program does not wait and continues.
+    WAIT_METALOADER_DRAWER_DIGITAL_INPUT = False
+
+    # When True whenever the application runtime is considered to
+    # be python. Meaning that the it is ran from either the
+    # "Task Editor" or the "Code Editor". This allow you to use the
+    # `tp_popup` and the `tp_get_user_input` properties.
+    USE_PYTHON_MODE = False
+
+    # When True whenever the state in the ProgramState react / the
+    # UI is informed. When you set it to False the log is spammed
+    # less which is useful for development.
+    INFORM_REACT_OF_STATE_CHANGES = True
+
+    # When True whenever the task_compliance_ctrl control calls
+    # are not made. For some reason me (Maarten) cannot get this
+    # to work on my virtual Cobot.
+    SET_TASK_COMPLIANCE_CTRL = True
+
+    # When True before a normal start the grippers are checked if they
+    # are not holding something.
+    PERFORM_GRIPPER_CHECKS = True
+
+    # When debugging the machine and want to run program continuosly
+    # Count how many times the cobot has finished the complete program
+    REPEAT = True
+
+    def setToUnitTest(self):
+        self.LOAD_CONFIG_FROM_JSON = True
+        self.REAL_MOTION = True
+        self.WAIT = True
+        self.CHECK_SERIAL = False
+        self.CHECK_IF_COBOT_HAS_FEEDBACK_ON_PICK = True
+        self.WAIT_FOR_DI_GRIPPER_OPENED = True
+        self.WAIT_FOR_COBOT_IS_CALLED = True
+        self.RUN_MACHINE = True
+        self.WAIT_FOR_DOOR_DIGITAL_INPUT = True
+        self.WAIT_OPEN_MAIN_JAW_DIGITAL_INPUT = True
+        self.WAIT_CLOSE_MAIN_JAW_DIGITAL_INPUT = True
+        self.WAIT_OPEN_SUB_JAW_DIGITAL_INPUT = True
+        self.WAIT_CLOSE_SUB_JAW_DIGITAL_INPUT = True
+        self.WAIT_METALOADER_DRAWER_DIGITAL_INPUT = True
+        self.USE_PYTHON_MODE = False
+        self.INFORM_REACT_OF_STATE_CHANGES = True
+        self.SET_TASK_COMPLIANCE_CTRL = True
+        self.PERFORM_GRIPPER_CHECKS = True
+
+
+DEBUG = Debug()
+# LOAD CONFIG ROUTINE
+
+# When `True` load the configuration from React instead of the
+# hard-coded values.
+if DEBUG.LOAD_CONFIG_FROM_JSON:
+
+    # In unit tests it will run twice, once for the `import drl`
+    # and once for the `importlib.reload(drl)`. On the first
+    # `import drl` app_data will be 'unittest-initial-run".
+    if app_data != "unittest-initial-run":
+        data = json.loads(app_data)
+
+        ENVIRONMENT = data["ENVIRONMENT"]
+
+        if ENVIRONMENT == "test":
+            DEBUG.setToUnitTest()
+
+        PROGRAM_MODE = data["PROGRAM_MODE"]
+        REACH_DRAWER = data["REACH_DRAWER"]
+
+        IO_MODE = data["IO_MODE"]
+        STEPPED_AXIS = data["STEPPED_AXIS"]
+        USE_SUB_SPINDLE = data["USE_SUB_SPINDLE"]
+        USE_SECOND_GRIPPER = data["USE_SECOND_GRIPPER"]
+        ROUND_PRODUCT = data["ROUND_PRODUCT"]
+        PUSH_AFTER_PLACE = data["PUSH_AFTER_PLACE"]
+        PUSH_GRIPPER_CLOSED = data["PUSH_GRIPPER_CLOSED"]
+        FORCE_INFEED = data["FORCE_INFEED"]
+        CLEAN_PRODUCT = data["CLEAN_PRODUCT"]
+        AIRPURGE_BEFORE_INFEED = data["AIRPURGE_BEFORE_INFEED"]
+        AIRPURGE_BEFORE_OUTFEED = data["AIRPURGE_BEFORE_OUTFEED"]
+        AIRPURGE_AFTER_OUTFEED = data["AIRPURGE_AFTER_OUTFEED"]
+
+        RAW_MAT_HEIGHT = data["RAW_MAT_HEIGHT"]
+        RAW_MAT_LENGTH = data["RAW_MAT_LENGTH"]
+        RAW_MAT_WIDTH = data["RAW_MAT_WIDTH"]
+        RAW_MAT_DIAMETER = data["RAW_MAT_DIAMETER"]
+        RAW_MAT_WEIGHT = data["RAW_MAT_WEIGHT"]
+
+        FIN_PRODUCT_HEIGHT = data["FIN_PRODUCT_HEIGHT"]
+        FIN_PRODUCT_LENGTH = data["FIN_PRODUCT_LENGTH"]
+        FIN_PRODUCT_WIDTH = data["FIN_PRODUCT_WIDTH"]
+        FIN_PRODUCT_DIAMETER = data["FIN_PRODUCT_DIAMETER"]
+        FIN_PRODUCT_WEIGHT = data["FIN_PRODUCT_WEIGHT"]
+        FIN_BOTTOM_OFFSET = data["FIN_BOTTOM_OFFSET"]
+        FIN_TOP_OFFSET = data["FIN_TOP_OFFSET"]
+
+        GRID_TYPE = data["GRID_TYPE"]
+        X_OFFSET_ORIGIN = data["X_OFFSET_ORIGIN"]
+        Y_OFFSET_ORIGIN = data["Y_OFFSET_ORIGIN"]
+        Z_OFFSET_ORIGIN = data["Z_OFFSET_ORIGIN"]
+        GRID_X_OFFSET = data["GRID_X_OFFSET"]
+        GRID_Y_OFFSET = data["GRID_Y_OFFSET"]
+        X_FIRST_SPOT = data["X_FIRST_SPOT"]
+        Y_FIRST_SPOT = data["Y_FIRST_SPOT"]
+        POSITIONING_PIN_DIAMETER = data["POSITIONING_PIN_DIAMETER"]
+        DISTANCE_POSITIONING_PINS = data["DISTANCE_POSITIONING_PINS"]
+        POS_POSPIN1_X = data["POS_POSPIN1_X"]
+        POS_POSPIN1_Y = data["POS_POSPIN1_Y"]
+        EQUAL_GRID = data["EQUAL_GRID"]
+        TOTAL_AMOUNT_PRODUCT_DRAWER = data["TOTAL_AMOUNT_PRODUCT_DRAWER"]
+        DRAWER_AMOUNT_PRODUCT_X = data["DRAWER_AMOUNT_PRODUCT_X"]
+        DRAWER_AMOUNT_PRODUCT_Y = data["DRAWER_AMOUNT_PRODUCT_Y"]
+        DRAWER_AMOUNT_PRODUCT_Z = data["DRAWER_AMOUNT_PRODUCT_Z"]
+        SECOND_DRAWER_AMOUNT_PRODUCT_X = data["SECOND_DRAWER_AMOUNT_PRODUCT_X"]
+        SECOND_DRAWER_AMOUNT_PRODUCT_Y = data["SECOND_DRAWER_AMOUNT_PRODUCT_Y"]
+        SECOND_DRAWER_AMOUNT_PRODUCT_Z = data["SECOND_DRAWER_AMOUNT_PRODUCT_Z"]
+        SECOND_DRAWER_SPOT_STATUS = json.loads(
+            data["SECOND_DRAWER_SPOT_STATUS"])
+
+        GR1_CLAW_DEPTH = data["GR1_CLAW_DEPTH"]
+        GR1_CLAW_HEIGHT = data["GR1_CLAW_HEIGHT"]
+        GR2_CLAW_DEPTH = data["GR2_CLAW_DEPTH"]
+        GR2_CLAW_HEIGHT = data["GR2_CLAW_HEIGHT"]
+        MAIN_CLAW_HEIGHT = data["MAIN_CLAW_HEIGHT"]
+        MAIN_CLAW_DEPTH = data["MAIN_CLAW_DEPTH"]
+        SUB_CLAW_HEIGHT = data["SUB_CLAW_HEIGHT"]
+        SUB_CLAW_DEPTH = data["SUB_CLAW_DEPTH"]
+
+        DRAWER_PICK_OFFSET_X = data["DRAWER_PICK_OFFSET_X"]
+        DRAWER_PICK_OFFSET_Y = data["DRAWER_PICK_OFFSET_Y"]
+        DRAWER_PICK_OFFSET_Z = data["DRAWER_PICK_OFFSET_Z"]
+        DRAWER_PLACE_OFFSET_X = data["DRAWER_PLACE_OFFSET_X"]
+        DRAWER_PLACE_OFFSET_Y = data["DRAWER_PLACE_OFFSET_Y"]
+        DRAWER_PLACE_OFFSET_Z = data["DRAWER_PLACE_OFFSET_Z"]
+
+        MACHINE_PICK_HEIGHT_OFFSET = data["MACHINE_PICK_HEIGHT_OFFSET"]
+        MACHINE_PICK_DEPTH_OFFSET = data["MACHINE_PICK_DEPTH_OFFSET"]
+        MACHINE_PLACE_HEIGHT_OFFSET = data["MACHINE_PLACE_HEIGHT_OFFSET"]
+        MACHINE_PLACE_DEPTH_OFFSET = data["MACHINE_PLACE_DEPTH_OFFSET"]
+
+        FORCE_FEEDING_NEWTON = data["FORCE_FEEDING_NEWTON"]
+        FORCE_PUSHING_NEWTON = data["FORCE_PUSHING_NEWTON"]
+        SPOT_STATUS = json.loads(data["SPOT_STATUS"])
+        FEEDER_TYPE = data["FEEDER_TYPE"]
+        HAS_SECOND_GRIPPER = data["HAS_SECOND_GRIPPER"]
+        MACHINE_HAS_SUB_SPINDLE = data["MACHINE_HAS_SUB_SPINDLE"]
+        MACHINE_TYPE = data["MACHINE_TYPE"]
+        NORMAL_START = data["NORMAL_START"]
+        AMOUNT_ALREADY_PRODUCED = data["AMOUNT_ALREADY_PRODUCED"]
+        MACHINE_CONTAINS_PRODUCT = data["MACHINE_CONTAINS_PRODUCT"]
+        USE_CURRENT_DRAWER = data["USE_CURRENT_DRAWER"]
+        TOTAL_AMOUNT_PRODUCTS = data["TOTAL_AMOUNT_PRODUCTS"]
+        TOOL_WEIGHT = data["TOOL_WEIGHT"]
+        MAX_CARRY_WEIGHT = data["MAX_CARRY_WEIGHT"]
+        CARRY_WEIGHT = data["CARRY_WEIGHT"]
+
+        TEACH_CONFIG_MAIN_CLAW_PRODUCT_HEIGHT = data["TEACH_CONFIG_MAIN_CLAW_PRODUCT_HEIGHT"]
+        TEACH_CONFIG_MAIN_CLAW_PRODUCT_WIDTH = data["TEACH_CONFIG_MAIN_CLAW_PRODUCT_WIDTH"]
+        TEACH_CONFIG_MAIN_CLAW_PRODUCT_LENGTH = data["TEACH_CONFIG_MAIN_CLAW_PRODUCT_LENGTH"]
+        TEACH_CONFIG_SUB_CLAW_PRODUCT_HEIGHT = data["TEACH_CONFIG_SUB_CLAW_PRODUCT_HEIGHT"]
+        TEACH_CONFIG_SUB_CLAW_PRODUCT_WIDTH = data["TEACH_CONFIG_SUB_CLAW_PRODUCT_WIDTH"]
+        TEACH_CONFIG_SUB_CLAW_PRODUCT_LENGTH = data["TEACH_CONFIG_SUB_CLAW_PRODUCT_LENGTH"]
+
+        TEACH_CONFIG_PLACE_SPINDLE_HEIGHT = data["TEACH_CONFIG_PLACE_SPINDLE_HEIGHT"]
+        TEACH_CONFIG_PLACE_SPINDLE_DEPTH = data["TEACH_CONFIG_PLACE_SPINDLE_DEPTH"]
+        TEACH_CONFIG_PICK_SPINDLE_HEIGHT = data["TEACH_CONFIG_PICK_SPINDLE_HEIGHT"]
+        TEACH_CONFIG_PICK_SPINDLE_DEPTH = data["TEACH_CONFIG_PICK_SPINDLE_DEPTH"]
+
+        TEACH_CONFIG_GR_RAW_HEIGHT = data["TEACH_CONFIG_GR_RAW_HEIGHT"]
+        TEACH_CONFIG_GR_RAW_DEPTH = data["TEACH_CONFIG_GR_RAW_DEPTH"]
+        TEACH_CONFIG_GR_FINISHED_HEIGHT = data["TEACH_CONFIG_GR_FINISHED_HEIGHT"]
+        TEACH_CONFIG_GR_FINISHED_DEPTH = data["TEACH_CONFIG_GR_FINISHED_DEPTH"]
+
+        AIRPURGE_MAIN_CLAW_POSITION_ANGLE = data["AIRPURGE_MAIN_CLAW_POSITION_ANGLE"]
+        AIRPURGE_MAIN_CLAW_POSITION_DISTANCE = data["AIRPURGE_MAIN_CLAW_POSITION_DISTANCE"]
+        AIRPURGE_SUB_CLAW_POSITION_ANGLE = data["AIRPURGE_SUB_CLAW_POSITION_ANGLE"]
+        AIRPURGE_SUB_CLAW_POSITION_DISTANCE = data["AIRPURGE_SUB_CLAW_POSITION_DISTANCE"]
+
+        HOME_POSITION = json.loads(data["HOME_POSITION"])
+        GRIPPER1_AT_DRAWER_POSITION = json.loads(
+            data["GRIPPER1_AT_DRAWER_POSITION"])
+        GRIPPER2_AT_DRAWER_POSITION = json.loads(
+            data["GRIPPER2_AT_DRAWER_POSITION"])
+        PATH_FROM_DRAWER_TO_OUTSIDE_MACHINE_DOOR = json.loads(
+            data["PATH_FROM_DRAWER_TO_OUTSIDE_MACHINE_DOOR"]
+        )
+        PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_MAIN_CLAW = json.loads(
+            data["PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_PLACE"]
+        )
+        PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_SUB_CLAW = json.loads(
+            data["PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_PICK"]
+        )
+        SUB_CLAW_POSITION = json.loads(data["MACHINE_PICK_POSITION"])
+        MAIN_CLAW_POSITION = json.loads(data["MACHINE_PLACE_POSITION"])
+
+        AIRPURGE_AT_MAIN_CLAW = json.loads(
+            data["AIRPURGE_BEFORE_INFEED_POSITION"]
+        )
+        AIRPURGE_AT_SUB_CLAW = json.loads(
+            data["AIRPURGE_BEFORE_OUTFEED_POSITION"]
+        )
+        PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_MAIN_CLAW = json.loads(
+            data["PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_BEFORE_INFEED"]
+        )
+        PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_SUB_CLAW = json.loads(
+            data["PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_BEFORE_OUTFEED"]
+        )
+
+        CLEAN_PRODUCT_POSITION = json.loads(data["CLEAN_PRODUCT_POSITION"])
+
+        DRAWER_LEFT_FRONT_TEACH_POSITION = json.loads(
+            data["DRAWER_LEFT_FRONT_TEACH_POSITION"]
+        )
+        DRAWER_RIGHT_FRONT_TEACH_POSITION = json.loads(
+            data["DRAWER_RIGHT_FRONT_TEACH_POSITION"]
+        )
+        DRAWER_LEFT_BACK_TEACH_POSITION = json.loads(
+            data["DRAWER_LEFT_BACK_TEACH_POSITION"]
+        )
+        DRAWER_RIGHT_BACK_TEACH_POSITION = json.loads(
+            data["DRAWER_RIGHT_BACK_TEACH_POSITION"]
+        )
+        PREVIOUS_STATE = json.loads(data["PREVIOUS_STATE"])
+
+        TOOL_WEIGHT_NAME = data["TOOL_WEIGHT_NAME"]
+        GRIPPER_1_TCP = data["GRIPPER_1_TCP"]
+        GRIPPER_2_TCP = data["GRIPPER_2_TCP"]
+        AIR_PURGE_TCP = data["AIR_PURGE_TCP"]
+
+        DEBUG.REPEAT = data["DEBUG_CONSTANTLY_LOOP_PROGRAM"]
+        DEBUG.WAIT_FOR_COBOT_IS_CALLED = data["DEBUG_WAIT_FOR_MACHINE_CALL"]
+        DEBUG.WAIT_FOR_DOOR_DIGITAL_INPUT = data["DEBUG_WAIT_FOR_MACHINE_DOOR"]
+
+        def parseInput(name):
+            ioData = json.loads(data[name])
+            return DigitalInput(ioData["type"], ioData["value"])
+
+        def parseOutput(name):
+            ioData = json.loads(data[name])
+            return DigitalOutput(ioData["type"], ioData["value"])
+
+        DO_GRIPPER1_OPEN = parseOutput("DO_GRIPPER1_OPEN")
+        DO_GRIPPER1_CLOSE = parseOutput("DO_GRIPPER1_CLOSE")
+        DO_GRIPPER2_OPEN = parseOutput("DO_GRIPPER2_OPEN")
+        DO_GRIPPER2_CLOSE = parseOutput("DO_GRIPPER2_CLOSE")
+        DO_AIRPURGE = parseOutput("DO_AIRPURGE")
+        DO_MAIN_SPINDLE_OPEN = parseOutput("DO_MAIN_SPINDLE_OPEN")
+        DO_MAIN_SPINDLE_CLOSE = parseOutput("DO_MAIN_SPINDLE_CLOSE")
+        DO_SUB_SPINDLE_OPEN = parseOutput("DO_SUB_SPINDLE_OPEN")
+        DO_SUB_SPINDLE_CLOSE = parseOutput("DO_SUB_SPINDLE_CLOSE")
+        DO_REQUEST_NEW_DRAWER = parseOutput("DO_REQUEST_NEW_DRAWER")
+        DO_RUN_MACHINE = parseOutput("DO_RUN_MACHINE")
+        DO_SEND_ALERT = parseOutput("DO_SEND_ALERT")
+
+        DI_GRIPPER1_IS_OPENED = parseInput("DI_GRIPPER1_IS_OPENED")
+        DI_GRIPPER1_IS_CLOSED = parseInput("DI_GRIPPER1_IS_CLOSED")
+        DI_GRIPPER2_IS_OPENED = parseInput("DI_GRIPPER2_IS_OPENED")
+        DI_GRIPPER2_IS_CLOSED = parseInput("DI_GRIPPER2_IS_CLOSED")
+        DI_DOOR_IS_OPENED = parseInput("DI_DOOR_IS_OPENED")
+        DI_MAIN_SPINDLE_IS_OPENED = parseInput("DI_MAIN_SPINDLE_IS_OPENED")
+        DI_MAIN_SPINDLE_IS_CLOSED = parseInput("DI_MAIN_SPINDLE_IS_CLOSED")
+        DI_SUB_SPINDLE_IS_OPENED = parseInput("DI_SUB_SPINDLE_IS_OPENED")
+        DI_SUB_SPINDLE_IS_CLOSED = parseInput("DI_SUB_SPINDLE_IS_CLOSED")
+        DI_NEW_DRAWER_IS_REQUESTED = parseInput("DI_NEW_DRAWER_IS_REQUESTED")
+        DI_COBOT_IS_CALLED = parseInput("DI_COBOT_IS_CALLED")
+
+        PLACE_FINISHED_PRODUCT_ON_SECOND_DRAWER = data[
+            "PLACE_FINISHED_PRODUCT_ON_SECOND_DRAWER"
+        ]
+
+        if PLACE_FINISHED_PRODUCT_ON_SECOND_DRAWER:
+            MAX_AMOUNT_PRODUCT_ON_SECOND_DRAWER = data[
+                "MAX_AMOUNT_PRODUCT_ON_SECOND_DRAWER"
+            ]
+            PATH_FROM_SECOND_DRAWER_TO_OUTSIDE_MACHINE_DOOR = json.loads(
+                data["PATH_FROM_SECOND_DRAWER_TO_OUTSIDE_MACHINE_DOOR"]
+            )
+
+            GRIPPER1_AT_SECOND_DRAWER_POSITION = json.loads(
+                data["GRIPPER1_AT_SECOND_DRAWER_POSITION"]
+            )
+            GRIPPER2_AT_SECOND_DRAWER_POSITION = json.loads(
+                data["GRIPPER2_AT_SECOND_DRAWER_POSITION"]
+            )
+            SECOND_DRAWER_LEFT_FRONT_TEACH_POSITION = json.loads(
+                data["SECOND_DRAWER_LEFT_FRONT_TEACH_POSITION"]
+            )
+            SECOND_DRAWER_LEFT_BACK_TEACH_POSITION = json.loads(
+                data["SECOND_DRAWER_LEFT_BACK_TEACH_POSITION"]
+            )
+            SECOND_DRAWER_RIGHT_FRONT_TEACH_POSITION = json.loads(
+                data["SECOND_DRAWER_RIGHT_FRONT_TEACH_POSITION"]
+            )
+            SECOND_DRAWER_RIGHT_BACK_TEACH_POSITION = json.loads(
+                data["SECOND_DRAWER_RIGHT_BACK_TEACH_POSITION"]
+            )
+
+        PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION = data[
+            "PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION"
+        ]
+
+        if PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION:
+            DROP_OFF_POSITION = json.loads(data["DROP_OFF_POSITION"])
+            PATH_FROM_DROP_OFF_POSITION_TO_OUTSIDE_MACHINE_DOOR = json.loads(
+                data["PATH_FROM_DROP_OFF_POSITION_TO_OUTSIDE_MACHINE_DOOR"]
+            )
+# IMPORTANT: ALL OF THESE SHOULD BE TRUE FOR PRODUCTION BUILDS
+# EXCEPT FOR `USE_PYTHON_MODE`!!!
+# endregion
+
+# PROGRAM STATE
+
+
+class ProgramState:
+    """This is the "main" class that kicks off the tending process"""
+
+    state = ""
+    productsToFabricate = 0
+    totalProductsFabricated = 0
+    xPick = 0
+    yPick = 0
+    zPick = 0
+    xPlace = 0
+    yPlace = 0
+    zPlace = 0
+    pickupFails = 0
+    drawerCount = 0
+    productsFabricatedOnCurrentDrawer = 0
+    productsPlacedOnCurrentDrawer = 0
+    productsPickedOnCurrentDrawer = 0
+    productsDroppedOnDropOff = 0
+
+    # The status of the spindles and grippers, can either be RAW, EMPTY or FINISHED
+    # when the second gripper or sub spindle is not used they remain EMPTY.
+    mainSpindleStatus = EMPTY
+    subSpindleStatus = EMPTY
+    gripper1Status = EMPTY
+    gripper2Status = EMPTY
+
+    # Whether or not the first raw material taken from the current drawer is
+    # in the machine. Is used to determine if a new raw material can immediately
+    # be picked from the drawer when having at least TWO spindles or TWO grippers.
+    firstRawMaterialThatWasTakenFromDrawerIsInMachine = True
+
+    # Variables used to transition to a next phase.
+    keepRunning = True
+    currentPhase = None
+    phase = None
+    reRunPhase = False
+
+    # The configuration of the machine
+    configMachine = ""
+
+    # Whether or not a drawer system is present, such as a MetaLoader or ProFeeder.
+    hasDrawerSystem = False
+
+    def __init__(self):
+        self.product = Product()
+        self.machine = Machine(self)
+        self.cobot = Cobot(self)
+        self.drawer = Drawer(self, self.cobot, self.product)
+        self.gripper = Gripper(self, self.cobot, self.product)
+
+    def assignDomainHelpers(self, object):
+        object.state = self
+        object.machine = self.machine
+        object.cobot = self.cobot
+        object.drawer = self.drawer
+        object.gripper = self.gripper
+        object.product = self.product
+
+    def run(self):
+        if DEBUG.CHECK_SERIAL:
+            if serialCode != ROBOT_SERIAL:
+                tp_log("MetaSuite: Invalid serial number!")
+                exit()
+
+        if PROGRAM_MODE == "MAIN":
+            self.phase = CONFIGURE_MACHINE_PHASE
+        elif PROGRAM_MODE == "REACH":
+            self.phase = REACH_TEST_PHASE
+        else:
+            tp_log("UNKNOWN PROGRAM")
+            exit()
+
+        # In tests we want to control when we move to the next phase in the test code
+        if ENVIRONMENT != "test":
+            # Python does not have tail call optimization, if you have
+            # a bunch of code / classes that keep instantiating without
+            # ever returning the stack will blow up, and give an error:
+            # python maximum recursion depth exceeded.
+            #
+            # So we apply a trick: we start a infinite loop and call
+            # classes based on which phase is active. If the phase is
+            # already active we do nothing. A phase should then call
+            # changePhase() to change to another phase.
+            while self.keepRunning:
+                self._runPhase()
+
+            exit()
+
+    def setState(self, state):
+        self.state = state
+
+        if DEBUG.INFORM_REACT_OF_STATE_CHANGES:
+            # Keep in sync with ProductsFabricateBar.tsx
+            # We send an array instead of an object because
+            # tp_log has a limit of 255 characters and we
+            # exceed that. React will turn it back into an object.
+            message = "METASUITE: " + json.dumps(
+                [
+                    self.state,
+                    self.productsToFabricate,
+                    self.productsFabricatedOnCurrentDrawer,
+                    self.productsPlacedOnCurrentDrawer,
+                    self.productsPickedOnCurrentDrawer,
+                    self.productsDroppedOnDropOff,
+                    self.xPick,
+                    self.yPick,
+                    self.zPick,
+                    self.xPlace,
+                    self.yPlace,
+                    self.zPlace,
+                    self.drawerCount,
+                    self.firstRawMaterialThatWasTakenFromDrawerIsInMachine,
+                    self.pickupFails,
+                    self.totalProductsFabricated,
+                    self.mainSpindleStatus,
+                    self.subSpindleStatus,
+                    self.gripper1Status,
+                    self.gripper2Status,
+                    self.phase,
+                ]
+            )
+
+            tp_log(message)
+
+            result = tp_get_user_input(message, input_type=DR_VAR_STR)
+        else:
+            tp_log(
+                state
+                + " { pick: "
+                + str(self.productsPickedOnCurrentDrawer)
+                + " place: "
+                + str(self.productsPlacedOnCurrentDrawer)
+                + " drawer: "
+                + str(self.drawerCount)
+                + " }"
+            )
+
+    def getProgress(self):
+        return (
+            str(TOTAL_AMOUNT_PRODUCTS - self.productsToFabricate + 1)
+            + " / "
+            + str(TOTAL_AMOUNT_PRODUCTS)
+            + " : "
+            + str(self.drawerCount)
+        )
+
+    def changePhase(self, nextPhase):
+        self.phase = nextPhase
+
+    def rerunPhase(self):
+        self.currentPhase = None
+
+    def _runPhase(self):
+        if self.currentPhase == self.phase:
+            return
+        else:
+            self.currentPhase = self.phase
+
+        if self.phase == CONFIGURE_MACHINE_PHASE:
+            ConfigureMachine(self).run()
+        elif self.phase == EXIT_PROGRAM_PHASE:
+            if DEBUG.REPEAT:
+                tp_log("DEBUG.REPEAT loop ")
+                self.state = ""
+                self.totalProductsFabricated = 0
+                self.xPick = 0
+                self.yPick = 0
+                self.zPick = 0
+                self.xPlace = 0
+                self.yPlace = 0
+                self.zPlace = 0
+                self.pickupFails = 0
+                self.drawerCount = 0
+                self.productsFabricatedOnCurrentDrawer = 0
+                self.productsPlacedOnCurrentDrawer = 0
+                self.productsPickedOnCurrentDrawer = 0
+                self.productsDroppedOnDropOff = 0
+                self.firstRawMaterialThatWasTakenFromDrawerIsInMachine = True
+                programState.productsToFabricate = TOTAL_AMOUNT_PRODUCTS
+                programState.run()
+            else:
+                ExitProgram(self).run()
+        elif self.phase == DETERMINE_START_PHASE:
+            DetermineStart(self).run()
+        elif self.phase == PICK_RAW_MATERIAL_FROM_DRAWER_PHASE:
+            PickRawMaterialFromDrawer(self).run()
+        elif self.phase == PLACE_RAW_MATERIAL_IN_MACHINE_PHASE:
+            PlaceRawMaterialInMachine(self).run()
+        elif self.phase == PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE:
+            PickFinishedProductFromMachine(self).run()
+        elif self.phase == PLACE_FINISHED_PRODUCT_ON_DRAWER_PHASE:
+            PlaceFinishedProductOnDrawer(self).run()
+        elif self.phase == PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION_PHASE:
+            PlaceFinishedProductOnDropOffPosition(self).run()
+        elif self.phase == REACH_TEST_PHASE:
+            ReachTest(self).run()
+
+    # Note this is used for failed picks and successful picks
+    def incrementFabrication(self):
+        self.totalProductsFabricated += 1
+        self.productsToFabricate -= 1
+
+        # Increase `productsFabricatedOnCurrentDrawer` even when
+        # `PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION` is `True`
+        self.productsFabricatedOnCurrentDrawer += 1
+
+    def isFabricatingLastItemOnDrawer(self):
+        return (
+            # The final drawer might not be completely filled, so we
+            # must also check on the `productsToFabricate`
+            self.productsToFabricate == 1
+            or
+            # Are we fabricating the last product on the drawer?
+            self.productsFabricatedOnCurrentDrawer == TOTAL_AMOUNT_PRODUCT_DRAWER - 1
+        )
+
+    def isDrawerFinished(self):
+        # Did we fabricate the last product on the drawer?
+        return self.productsFabricatedOnCurrentDrawer == TOTAL_AMOUNT_PRODUCT_DRAWER
+
+
+# region Hardware
+# I'm unsure what "Domain helpers" are supposed to be.
+
+# DOMAIN HELPERS
+
+
+class Cobot:
+    """Represents the cobot"""
+
+    def __init__(self, state):
+        self.state = state
+
+    def moveHome(self):
+        self.state.setState("HOMING")
+
+        if DEBUG.REAL_MOTION == False or self.isOnHomePosition():
+            tp_log(">> cobot is already home")
+            self.state.setState("ROBOT_HOME")
+        else:
+            tp_log(">> moving to home position")
+            #######################################################
+            ################  HOMING MOVEMENTS  ###################
+            #######################################################
+            actualJoint = get_current_posj()
+            actualPos, sol = get_current_posx()
+            if actualJoint[0] > -65 and actualJoint[0] < 65 and actualPos[2] < 350:
+                self.movelSlow(
+                    [0, 0, -(RAW_MAT_HEIGHT * DRAWER_AMOUNT_PRODUCT_Z) - 50, 0, 0, 0],
+                    ref=DR_TOOL,
+                    mod=DR_MV_MOD_REL,
+                )
+
+            # Call move_home with DR_HOME_TARGET_USER which uses the
+            # HOME_POSITION behind the scenes.
+            move_home(DR_HOME_TARGET_USER)
+
+            self.state.setState("ROBOT_HOME")
+
+    def isOnHomePosition(self):
+        home = fkin(pos=HOME_POSITION, ref=DR_BASE)
+        x = check_position_condition(
+            DR_AXIS_X, min=-50, max=50, mod=DR_MV_MOD_REL, pos=home
+        )
+        y = check_position_condition(
+            DR_AXIS_Y, min=-50, max=50, mod=DR_MV_MOD_REL, pos=home
+        )
+        z = check_position_condition(
+            DR_AXIS_Z, min=-30, max=30, mod=DR_MV_MOD_REL, pos=home
+        )
+
+        return x and y and z
+
+    def cleanProduct(self):
+        """
+        Clean a finished product after picking it.
+        """
+
+        self.state.setState("CLEAN_PRODUCT")
+
+        if USE_SECOND_GRIPPER:
+            set_tcp(GRIPPER_2_TCP)
+        else:
+            set_tcp(GRIPPER_1_TCP)
+
+        tp_log(
+            ">> moving from outside machine door to clean product position -> PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_CLEAN_PRODUCT"
+        )
+        self.movejPath(PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_CLEAN_PRODUCT)
+
+        position = posx(CLEAN_PRODUCT_POSITION)
+
+        shake_orient = trans(position, [0, 0, 0, 0, 20, 0], DR_TOOL)
+        tp_log(">> clean product motion")
+
+        self.movelNormal(
+            trans(position, [0, 0, 150, 0, 0, 0], DR_BASE),
+            ref=DR_BASE,
+        )
+        self.movelNormal(
+            trans(shake_orient, [0, 0, 50, 0, 0, 0], DR_BASE),
+            ref=DR_BASE,
+        )
+        self.movelNormal(
+            trans(shake_orient, [0, 0, 0, 0, 0, 0], DR_BASE),
+            ref=DR_BASE,
+        )
+
+        for i in range(0, 10):
+            self.movelHigh(
+                trans(shake_orient, [0, 0, -50, 0, 0, 0], DR_BASE),
+                r=5,
+                ref=DR_BASE,
+            )
+            self.movelHigh(
+                trans(shake_orient, [0, 0, 0, 0, 0, 0], DR_BASE),
+                r=5,
+            )
+
+        self.movelNormal(
+            trans(shake_orient, [0, 0, 150, 0, 0, 0], DR_BASE),
+            ref=DR_BASE,
+        )
+        self.waitInput(3)
+
+        for i in range(0, 10):
+            self.movelHigh(
+                trans(shake_orient, [0, 0, 200, 0, 0, 0], DR_BASE),
+                r=5,
+                ref=DR_BASE,
+            )
+            self.movelHigh(
+                trans(shake_orient, [0, 0, 150, 0, 0, 0], DR_BASE),
+                r=5,
+                ref=DR_BASE,
+            )
+
+        self.movejPath(
+            list(reversed(PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_CLEAN_PRODUCT)))
+        self.state.setState("PRODUCT_CLEANED")
+
+    def airpurge(self, message, purgePosition, toPurgePosition):
+        self.state.setState(message)
+
+        position = posx(purgePosition, ori_type=DR_ELR_ZYX)
+
+        set_tcp(AIR_PURGE_TCP)
+
+        if (USE_SUB_SPINDLE and (message == "AIRPURGE_BEFORE_OUTFEED" or message == "AIRPURGE_AFTER_OUTFEED")):
+            position = trans(
+                position, [0, 0, -AIRPURGE_SUB_CLAW_POSITION_DISTANCE, 0, 0, 0], DR_TOOL)
+            position = trans(
+                position, [0, 0, 0, AIRPURGE_SUB_CLAW_POSITION_ANGLE, 0, 0], DR_TOOL)
+        else:
+            position = trans(
+                position, [0, 0, -AIRPURGE_MAIN_CLAW_POSITION_DISTANCE, 0, 0, 0], DR_TOOL)
+            position = trans(
+                position, [0, 0, 0, AIRPURGE_MAIN_CLAW_POSITION_ANGLE, 0, 0], DR_TOOL)
+
+        if (message == "AIRPURGE_BEFORE_OUTFEED"):
+            position = trans(
+                position, [0, 0, -FIN_PRODUCT_HEIGHT, 0, 0, 0], DR_TOOL)
+
+        x1 = trans(position, [30, 0, 0, 10, 0, 0], DR_BASE)
+        x2 = trans(position, [0, 0, 30, 0, 0, 0], DR_BASE)
+        x2 = trans(x2, [0, 0, 0, 0, -15, 0], DR_TOOL)
+        x3 = trans(position, [-30, 0, 0, -10, 0, 0], DR_BASE)
+        x4 = trans(position, [0, 0, -30, 0, 0, 0], DR_BASE)
+        x4 = trans(x4, [0, 0, 0, 0, 10, 0], DR_TOOL)
+        x5 = trans(position, [30, 0, 0, 10, 0, 0], DR_BASE)
+        x6 = trans(position, [0, 0, -10, 0, 0, 0], DR_TOOL)
+
+        tp_log(">> move to air purge position")
+        self.movejPath(toPurgePosition)
+
+        tp_log(">> air purge motion")
+        self.movelSlow(x1, ref=DR_BASE)
+
+        xlist = [x1, x2, x3, x4, x5]
+        DO_AIRPURGE.set(ON)
+
+        if DEBUG.REAL_MOTION:
+            movesx(
+                xlist, vel=TASK.SLOW.SPEED, acc=TASK.SLOW.ACC, vel_opt=DR_MVS_VEL_NONE
+            )
+
+        DO_AIRPURGE.set(OFF)
+        self.movelSlow(x6, ref=DR_BASE)
+
+        self.state.setState(message + "_DONE")
+
+        tp_log(">> air purge done move back to previous position")
+        self.movejPath(list(reversed(toPurgePosition)))
+
+    def moveFromDrawerToHome(self):
+        self.state.setState("MOVE_FROM_DRAWER_TO_HOME")
+
+        tp_log(">> moving from drawer to home -> HOME_POSITION")
+        self.movejNormal(HOME_POSITION)
+
+    def moveOutsideMachine(self):
+        self.state.setState("MOVE_OUTSIDE_MACHINE")
+
+        tp_log(">> move outside of machine")
+
+        self.movejNormal(PATH_FROM_DRAWER_TO_OUTSIDE_MACHINE_DOOR[-1])
+
+    def moveFromMachineToDrawer(self):
+        self.state.setState("MOVE_FROM_MACHINE_TO_DRAWER")
+
+        tp_log(
+            ">> moving from outside machine door to drawer -> reversed PATH_FROM_DRAWER_TO_OUTSIDE_MACHINE_DOOR"
+        )
+
+        self.movejPath(
+            list(reversed(PATH_FROM_DRAWER_TO_OUTSIDE_MACHINE_DOOR)),
+        )
+
+    def moveFromDrawerToMachine(self):
+        self.state.setState("MOVE_FROM_DRAWER_TO_MACHINE")
+
+        tp_log(
+            ">> moving from drawer to outside machine door -> PATH_FROM_DRAWER_TO_OUTSIDE_MACHINE_DOOR"
+        )
+        self.movejPath(PATH_FROM_DRAWER_TO_OUTSIDE_MACHINE_DOOR)
+
+    def moveFromSecondDrawerToMachine(self):
+        self.state.setState("MOVE_FROM_SECOND_DRAWER_TO_MACHINE")
+
+        tp_log(
+            ">> moving from second drawer to outside machine door -> PATH_FROM_SECOND_DRAWER_TO_OUTSIDE_MACHINE_DOOR"
+        )
+        self.movejPath(PATH_FROM_SECOND_DRAWER_TO_OUTSIDE_MACHINE_DOOR)
+
+    def moveFromMachineToSecondDrawer(self):
+        self.state.setState("MOVE_FROM_MACHINE_TO_SECOND_DRAWER")
+
+        tp_log(
+            ">> moving from outside machine door to second drawer -> reversed 'PATH_FROM_SECOND_DRAWER_TO_OUTSIDE_MACHINE_DOOR"
+        )
+        self.movejPath(
+            list(reversed(PATH_FROM_SECOND_DRAWER_TO_OUTSIDE_MACHINE_DOOR)),
+        )
+
+    def moveFromDropOffToMachine(self):
+        self.state.setState("MOVE_FROM_DROP_OFF_TO_MACHINE")
+
+        tp_log(
+            ">> moving from drop off position to outside machine door -> PATH_FROM_DROP_OFF_POSITION_TO_OUTSIDE_MACHINE_DOOR"
+        )
+        self.movejPath(PATH_FROM_DROP_OFF_POSITION_TO_OUTSIDE_MACHINE_DOOR)
+
+    def moveFromMachineToDropOff(self):
+        self.state.setState("MOVE_FROM_MACHINE_TO_DROP_OFF")
+
+        tp_log(
+            ">> moving from outside machine door to drop off position -> reversed PATH_FROM_DROP_OFF_POSITION_TO_OUTSIDE_MACHINE_DOOR"
+        )
+        self.movejPath(
+            list(reversed(PATH_FROM_DROP_OFF_POSITION_TO_OUTSIDE_MACHINE_DOOR)),
+        )
+
+    def useForce(self, action, force, targetposition):
+        """
+        force: amount of force (newton)
+        targetposition: place where we expect to have to start pushing.
+        """
+        # JACCO: Added 10N, because it often happens that we don't reach the target force,
+        # causing the program to freeze UNTIL we push some on the robot
+
+        # NOTE: I changed the code to move to a target position, because the code that was
+        # used before would just move in a general direction, rather than position precisely.
+        # task compliance + force is not a guarantee the robot will only move in Z-direction!
+        # if action == "PUSH_AFTER_PLACE" and PUSH_GRIPPER_CLOSED:
+        #     position = trans(targetposition, [0, 0, 30, 0, 0, 0], DR_TOOL)
+        # else:
+        #     position = trans(targetposition, [0, 0, 10, 0, 0, 0], DR_TOOL)
+
+        set_ref_coord(DR_TOOL)
+
+        boolIncrForce = True
+        force_Z = 0
+        timer = 0.0
+        waitTime = 0.5
+
+        # if action == "PUSH_AFTER_PLACE" and PUSH_GRIPPER_CLOSED == False:
+        #     translationBack = [0, 0, -2, 0, 0, 0]
+        #     movel(translationBack, vel=40.0, acc=40, mod=DR_MV_MOD_REL)
+        if action == "PUSH_AFTER_PLACE":
+            forceCorrection = 0
+            pushTranslation = [0, 0, MAIN_CLAW_DEPTH + 3, 0, 0, 0]
+        else:
+            if force > 12:
+                forceCorrection = 10
+            else:
+                forceCorrection = 0
+            translation = [0, 0, MAIN_CLAW_DEPTH - 3, 0, 0, 0]
+            pushTranslation = [0, 0, 10, 0, 0, 0]
+            movel(translation, vel=30.0, acc=30,
+                  mod=DR_MV_MOD_REL)
+
+        self.state.setState("USE_FORCE")
+
+        if DEBUG.REAL_MOTION == False:
+            return
+
+        if DEBUG.SET_TASK_COMPLIANCE_CTRL:
+            self.setCompliance()
+            set_stiffnessx([20000, 20000, 5000, 1000, 1000, 1000])
+
+        # move linearly until we hit something, or reach target position.
+        amovel(pushTranslation, vel=30.0, acc=30,
+               mod=DR_MV_MOD_REL)
+
+        forceTouchmentcheck = 10
+        if force < forceTouchmentcheck:
+            forceTouchmentcheck = force
+
+        while True:
+            if check_force_condition(DR_AXIS_Z, min=forceTouchmentcheck, ref=DR_TOOL):
+                break
+        stop(DR_HOLD)
+
+        set_external_force_reset()
+        if force == forceTouchmentcheck:
+            f_d = [0, 0, (1), 0, 0, 0]
+        else:
+            if action == "PUSH_AFTER_PLACE" and PUSH_GRIPPER_CLOSED == False:
+                f_d = [0, 0, (5), 0, 0, 0]
+            else:
+                f_d = [0, 0, (force - forceCorrection), 0, 0, 0]
+        f_dir = [0, 0, 1, 0, 0, 0]
+        set_desired_force(f_d, f_dir, mod=DR_FC_MOD_REL)
+
+        if action == 'PUSH_AFTER_PLACE':
+
+            while True:
+                forceActual = get_tool_force(DR_TOOL)
+                force_Z = abs(forceActual[2])
+                if force_Z >= force-15:
+                    break
+
+            DO_MAIN_SPINDLE_CLOSE.set(OFF)
+            DO_MAIN_SPINDLE_OPEN.set(ON)
+
+            if DEBUG.WAIT_OPEN_MAIN_JAW_DIGITAL_INPUT:
+                DI_MAIN_SPINDLE_IS_OPENED.waitInput(ON)
+
+            while boolIncrForce:
+                while True:
+                    start_timer()
+                    forceActual = get_tool_force(DR_TOOL)
+                    force_Z = abs(forceActual[2])
+
+                    tp_log("force cobot = " + str(force_Z))
+                    t = end_timer()
+                    timer = timer + t
+                    if check_force_condition(DR_AXIS_Z, min=force - 5, ref=DR_TOOL):
+                        stop(DR_HOLD)
+                        boolIncrForce = False
+                        break
+
+                    if timer > waitTime:
+                        boolIncrForce = True
+                        stop(DR_HOLD)
+                        timer = 0
+                        waitTime = 0.5
+                        break
+
+                if force <= forceTouchmentcheck + 5:
+                    f_d = [0, 0, (1), 0, 0, 0]
+                else:
+                    f_d = [0, 0, (5), 0, 0, 0]
+                    f_dir = [0, 0, 1, 0, 0, 0]
+                    set_desired_force(f_d, f_dir, mod=DR_FC_MOD_REL)
+
+    def movejPath(self, positions):
+        if DEBUG.REAL_MOTION == False:
+            return
+
+        noPositions = len(positions)
+
+        if noPositions == 0:
+            return
+        elif noPositions == 1:
+            movej(positions[0], v=JOINT.NORMAL.SPEED, a=JOINT.NORMAL.ACC)
+        elif noPositions == 2:
+            movej(positions[0], v=JOINT.NORMAL.SPEED, a=JOINT.NORMAL.ACC, r=10)
+            movej(positions[1], v=JOINT.NORMAL.SPEED, a=JOINT.NORMAL.ACC)
+        else:
+            # movesj requires actual posj so convert them all first
+            position = [posj(pos) for pos in positions]
+            movesj(position, v=JOINT.NORMAL.SPEED, a=JOINT.NORMAL.ACC)
+
+            # Movej to last position cobot doesnt like to end with sj movement I think because of the blend.
+            movej(positions[-1], v=JOINT.NORMAL.SPEED, a=JOINT.NORMAL.ACC)
+
+    def _movej(self, position, speedProps):
+        if DEBUG.REAL_MOTION == False:
+            return
+
+        movej(position, v=speedProps.SPEED, a=speedProps.ACC)
+
+    def movejNormal(self, position):
+        self._movej(position, JOINT.NORMAL)
+
+    def movejHigh(self, position):
+        self._movej(position, JOINT.HIGH)
+
+    def movejSlow(self, position):
+        self._movej(position, JOINT.SLOW)
+
+    def _movel(self, position, speedProps, r=None, ref=None, mod=DR_MV_MOD_ABS):
+        if DEBUG.REAL_MOTION == False:
+            return
+
+        movel(position, v=speedProps.SPEED,
+              a=speedProps.ACC, r=r, ref=ref, mod=mod)
+
+    def movelNormal(self, position, r=None, ref=None, mod=DR_MV_MOD_ABS):
+        self._movel(position, TASK.NORMAL, r=r, ref=ref, mod=mod)
+
+    def movelHigh(self, position, r=None, ref=None, mod=DR_MV_MOD_ABS):
+        self._movel(position, TASK.HIGH, r=r, ref=ref, mod=mod)
+
+    def movelSlow(self, position, r=None, ref=None, mod=DR_MV_MOD_ABS):
+        self._movel(position, TASK.SLOW, r=r, ref=ref, mod=mod)
+
+    def waitTime(self, seconds):
+        if DEBUG.WAIT == False:
+            return
+        wait(seconds)
+
+    def setCompliance(self):
+        while True:
+            if check_motion() == 0:
+                break
+
+        set_external_force_reset()
+        task_compliance_ctrl()
+        tp_log(">> Compliance controll ON")
+
+
+class Position:
+    """
+    Represents a position on a Spot and has a status which can be
+    either RAW, EMPTY or FINISHED (as a number).
+
+    The higher the index the higher it sits above the actual drawer,
+    when the index is zero it sits on the metal of the drawer.
+    """
+
+    def __init__(self, index, status):
+        self.index = index
+        self.status = status
+
+
+class Spot:
+    """
+    Represents a spot on the drawer which has 1..N number of Position
+    based on the DRAWER_AMOUNT_PRODUCT_Z.
+
+    A Spot is either a square cutout in the case of a STATIC grid or a
+    pinTriplet / pinPair in case of a pinned grid.
+    """
+
+    def __init__(self, index, positions):
+        self.index = index
+        self.positions = positions
+
+
+class Drawer:
+    """Represents the drawer to place / pick products from."""
+
+    def __init__(self, state, cobot, product):
+        self.state = state
+        self.cobot = cobot
+        self.product = product
+
+        self.mainDrawerSpots = []
+        self.secondDrawerSpots = []
+
+        self.mainDrawerSpotOrder = self._calculateMainDrawerSpotOrder()
+        self.secondDrawerSpotOrder = self._calculateSecondDrawerSpotOrder()
+
+        self.mainDrawerLeftFront = coord_transform(
+            posx(DRAWER_LEFT_FRONT_TEACH_POSITION, ori_type=DR_ELR_ZYX),
+            DR_BASE,
+            DRAWER_COORDINATE_SYSTEM,
+            DR_ELR_ZYX,
+        )
+        self.mainDrawerRightFront = coord_transform(
+            posx(DRAWER_RIGHT_FRONT_TEACH_POSITION, ori_type=DR_ELR_ZYX),
+            DR_BASE,
+            DRAWER_COORDINATE_SYSTEM,
+            DR_ELR_ZYX,
+        )
+        self.mainDrawerRightBack = coord_transform(
+            posx(DRAWER_RIGHT_BACK_TEACH_POSITION, ori_type=DR_ELR_ZYX),
+            DR_BASE,
+            DRAWER_COORDINATE_SYSTEM,
+            DR_ELR_ZYX,
+        )
+        self.mainDrawerLeftBack = coord_transform(
+            posx(DRAWER_LEFT_BACK_TEACH_POSITION, ori_type=DR_ELR_ZYX),
+            DR_BASE,
+            DRAWER_COORDINATE_SYSTEM,
+            DR_ELR_ZYX,
+        )
+
+        self.secondDrawerLeftFront = coord_transform(
+            posx(SECOND_DRAWER_LEFT_FRONT_TEACH_POSITION, ori_type=DR_ELR_ZYX),
+            DR_BASE,
+            SECOND_DRAWER_COORDINATE_SYSTEM,
+            DR_ELR_ZYX,
+        )
+        self.secondDrawerRightFront = coord_transform(
+            posx(SECOND_DRAWER_RIGHT_FRONT_TEACH_POSITION, ori_type=DR_ELR_ZYX),
+            DR_BASE,
+            SECOND_DRAWER_COORDINATE_SYSTEM,
+            DR_ELR_ZYX,
+        )
+        self.secondDrawerRightBack = coord_transform(
+            posx(SECOND_DRAWER_RIGHT_BACK_TEACH_POSITION, ori_type=DR_ELR_ZYX),
+            DR_BASE,
+            SECOND_DRAWER_COORDINATE_SYSTEM,
+            DR_ELR_ZYX,
+        )
+        self.secondDrawerLeftBack = coord_transform(
+            posx(SECOND_DRAWER_LEFT_BACK_TEACH_POSITION, ori_type=DR_ELR_ZYX),
+            DR_BASE,
+            SECOND_DRAWER_COORDINATE_SYSTEM,
+            DR_ELR_ZYX,
+        )
+
+    def initSpotsForSecondDrawer(self):
+        self.secondDrawerSpots = self._generateSpots(
+            SECOND_DRAWER_AMOUNT_PRODUCT_X,
+            SECOND_DRAWER_AMOUNT_PRODUCT_Y,
+            SECOND_DRAWER_AMOUNT_PRODUCT_Z,
+        )
+
+    def initSpots(self):
+        # For each drawer we reinitialize all the spots
+        self.mainDrawerSpots = self._generateSpots(
+            DRAWER_AMOUNT_PRODUCT_X, DRAWER_AMOUNT_PRODUCT_Y, DRAWER_AMOUNT_PRODUCT_Z
+        )
+
+        if PLACE_FINISHED_PRODUCT_ON_SECOND_DRAWER:
+            self.initSpotsForSecondDrawer()
+
+        # When mode is OUTPUT there should not be any RAW materials
+        # placed on the drawer
+        if IO_MODE != OUTPUT:
+            self._fillMainDrawerWithRawMaterials()
+
+    def _generateSpots(self, drawerAmountX, drawerAmountY, drawerAmountZ):
+        spots = []
+
+        # Generate all spots and all positions on the spots.
+        #
+        # The get_pattern_point requires an `index` parameter this
+        # index is the position it will calculate the coordinates for.
+        #
+        # When the number of products stacked on top of each other,
+        # called the `DRAWER_AMOUNT_PRODUCT_Z`, is 2 and the grid has
+        # 7 horizontal squares (`DRAWER_AMOUNT_PRODUCT_X`) and
+        # 4 vertical squares (`DRAWER_AMOUNT_PRODUCT_Y`),
+        # there will be a total of of 56 positions.
+        #
+        # This is because each layer has 7 * 4 = 28 spots,
+        # multiplied by 2 for the stack is 28 * 2 = 56 positions.
+        #
+        # In a 7 * 4 grid the will have 28 spots, each spot will have
+        # the following index, we start counting spots from the bottom
+        # left:
+        #
+        #           COBOT
+        # 21  22  23  24  25  26  27
+        # 14  15  16  17  18  19  20
+        # 07  08  09  10  11  12  13
+        # 00  01  02  03  04  05  06
+        #
+        # Here is a ASCII art representation of the positions per
+        # layer, were lower layers are closest to the metal
+        # of the drawer.
+        #
+        #       == Layer 0 ==
+        # 21  22  23  24  25  26  27
+        # 14  15  16  17  18  19  20
+        # 07  08  09  10  11  12  13
+        # 00  01  02  03  04  05  06
+        #
+        #       == Layer 1 ==
+        # 49  50  51  52  53  54  55
+        # 42  43  44  45  46  47  48
+        # 35  36  37  38  39  40  41
+        # 28  29  30  31  32  33  34
+        #
+        # So the spot with index 0 will the positions with index: [28, 00]
+        #
+        # Here is another visualization this time of a 2 x 4 x 3 grid.
+        #
+        # Below you will find the order visualized, below the `=` line
+        # you can see the spots, above the `=` line you can see the
+        # positions inside the spot.
+        #
+        # 16 17 18 19 20 21 22 23
+        # 8  9  10 11 12 13 14 15
+        # 0  1  2  3  4  5  6  7
+        # ======================
+        # 0  1  2  3  4  5  6  7
+
+        totalSpots = drawerAmountX * drawerAmountY
+
+        for spotIndex in range(totalSpots):
+            positions = []
+
+            # We start filling from the top to the bottom the lower
+            # the index in the positions array the higher it appears
+            # on the drawer.
+            for layer in range(drawerAmountZ - 1, -1, -1):
+                positionIndex = layer * totalSpots + spotIndex
+                position = Position(positionIndex, EMPTY)
+                positions.append(position)
+
+            spot = Spot(spotIndex, positions)
+            spots.append(spot)
+
+        return spots
+
+    def _fillMainDrawerWithRawMaterials(self):
+        # How many items are going to be fabricated on the current drawer?
+        #
+        # When the `TOTAL_AMOUNT_PRODUCT_DRAWER` is `10` and the
+        # `productsToFabricate` is `4` we know that we are on the last
+        # drawer which is not completely full. So we know this drawer
+        # has `4` raw materials
+        #
+        # When the `TOTAL_AMOUNT_PRODUCT_DRAWER` is `10` and the
+        # `productsToFabricate` is `100` we know that we are not on
+        # the last drawer. So we know this drawer has `10` raw
+        # materials
+        productsToFabricateOnDrawer = min(
+            TOTAL_AMOUNT_PRODUCT_DRAWER, self.state.productsToFabricate
+        )
+
+        # Place all RAW products
+        spotNo = 0
+        for i in range(productsToFabricateOnDrawer):
+            placed = False
+            while not placed:
+                spotIndex = self.mainDrawerSpotOrder[spotNo]
+
+                # Find the next reachable spot
+                if SPOT_STATUS[spotIndex] == False:
+                    spotNo += 1
+                    continue
+
+                spot = self.mainDrawerSpots[spotIndex]
+
+                # If the first position can only contain a single product
+                # set its lowest position to contain one RAW item and
+                # leave the rest EMPTY.
+                if i == 0 and not self.canFillFirstSquareCompletely():
+                    spot.positions[DRAWER_AMOUNT_PRODUCT_Z - 1].status = RAW
+                    spotNo += 1
+                    placed = True
+                else:
+                    # Reverse to start stacking from the first layer
+                    # which is the closest to the metal of the drawer.
+                    for position in reversed(spot.positions):
+                        if position.status == EMPTY:
+                            position.status = RAW
+                            placed = True
+                            break
+
+                    if not placed:
+                        spotNo += 1
+
+        # Prints the spots to the console for debugging
+        # for spot in self.mainDrawerSpots:
+        #     print("{}".format(spot.index))
+        #     for position in spot.positions:
+        #         print(" > {} - {}".format(position.index, position.status))
+
+    def _calculateMainDrawerSpotOrder(self):
+        # The main drawers order starts at the top left and works its
+        # way down from left to right.
+        #
+        # The spot order in a 3 x 3 x 3 example will have 3 * 3 = 9
+        # spots, visually this looks like this:
+        #
+        # [6, 7, 8]
+        # [3, 4, 5]
+        # [0, 1, 2]
+        #
+        # Below you will find the order visualized, below the `=` line
+        # you can see the spot order, above the `=` line you can see
+        # the positions inside the spot.
+        #
+        # 24 25 26 21 22 23 18 19 20
+        # 15 16 17 12 13 14 9  10 11
+        # 6  7  8  3  4  5  0  1  2
+        # =========================
+        # 6  7  8  3  4  5  0  1  2
+        #
+        # Given the 3 x 3 x 3 the code below returns the following
+        # array: [6, 7, 8, 3, 4, 5, 0, 1, 2]
+
+        order = []
+
+        for y in range(DRAWER_AMOUNT_PRODUCT_Y, 0, -1):
+            leftMostSpotOnY = DRAWER_AMOUNT_PRODUCT_X * y - DRAWER_AMOUNT_PRODUCT_X
+
+            for x in range(0, DRAWER_AMOUNT_PRODUCT_X):
+                order.append(leftMostSpotOnY + x)
+
+        return order
+
+    def _calculateSecondDrawerSpotOrder(self):
+        # The second drawers order starts at the bottom right and works
+        # its way up from right to left
+        #
+        # The spot order in a 3 x 3 x 3 example will have 3 * 3 = 9
+        # spots, visually this looks like this:
+        #
+        # [6, 7, 8]
+        # [3, 4, 5]
+        # [0, 1, 2]
+        #
+        # Below you will find the order visualized, below the `=` line
+        # you can see the spot order, above the `=` line you can see
+        # the positions inside the spot.
+        #
+        # 20 19 18 23 22 21 26 25 24
+        # 11 10 9  14 13 12 17 16 15
+        # 2  1  0  5  4  3  8  7  6
+        # ==========================
+        # 2  1  0  5  4  3  8  7  6
+        #
+        # Given the 3 x 3 x 3 the code below returns the following
+        # array: [2, 1, 0, 5, 4, 3, 8, 7, 6]
+
+        order = []
+
+        for y in range(0, SECOND_DRAWER_AMOUNT_PRODUCT_Y):
+            rightMostSpotOnY = SECOND_DRAWER_AMOUNT_PRODUCT_X * \
+                y + SECOND_DRAWER_AMOUNT_PRODUCT_X
+
+            for x in range(0, SECOND_DRAWER_AMOUNT_PRODUCT_X):
+                order.append(rightMostSpotOnY - x - 1)
+
+        return order
+
+    def nextPickPosition(self):
+        position = self._findFirstPositionWithRawStatus(
+            self.mainDrawerSpots, self.mainDrawerSpotOrder
+        )
+        # Mark it as empty
+        position.status = EMPTY
+
+        return self.calculateStaticGridPosition(
+            pick=True, patternPointIndex=position.index
+        )
+
+    def _findFirstPositionWithRawStatus(self, spots, spotOrder):
+        for spotIndex in spotOrder:
+            spot = spots[spotIndex]
+
+            if SPOT_STATUS[spot.index] == False:
+                continue
+            for position in spot.positions:
+                if position.status == RAW:
+                    position.status = EMPTY
+                    return position
+
+    def nextPlacePosition(self):
+        if self.shouldPlaceFinishedProductOnSecondDrawer():
+            spots = self.secondDrawerSpots
+            spotOrder = self.secondDrawerSpotOrder
+            spotStatus = SECOND_DRAWER_SPOT_STATUS
+        else:
+            spots = self.mainDrawerSpots
+            spotOrder = self.mainDrawerSpotOrder
+            spotStatus = SPOT_STATUS
+
+        position = self._findFirstPositionWithEmptyStatus(
+            spots, spotStatus, spotOrder)
+
+        # Mark it as finished
+        position.status = FINISHED
+
+        return self.calculateStaticGridPosition(
+            pick=False, patternPointIndex=position.index
+        )
+
+    def _findFirstPositionWithEmptyStatus(self, spots, spotStatus, spotOrder):
+        for spotIndex in spotOrder:
+            spot = spots[spotIndex]
+            if spotStatus[spot.index] == False:
+                continue
+            # reversed so we start from the bottom of the drawer
+            for position in reversed(spot.positions):
+                if position.status == EMPTY:
+                    return position
+
+    def calculateStaticGridPosition(self, pick, patternPointIndex):
+        """
+        Calculates position for a product on a static grid (like the EasyLoader)
+        param @pick : boolean, if True request a pick position, otherwise a place position
+        param @patternPointIndex : number, the index to use for the get_pattern_point function
+        """
+
+        if pick:
+
+            pickPose = get_pattern_point(
+                self.mainDrawerLeftFront,
+                self.mainDrawerRightFront,
+                self.mainDrawerRightBack,
+                self.mainDrawerLeftBack,
+                patternPointIndex,
+                1,  # zig zag
+                DRAWER_AMOUNT_PRODUCT_Y,
+                DRAWER_AMOUNT_PRODUCT_X,
+                DRAWER_AMOUNT_PRODUCT_Z,
+                RAW_MAT_HEIGHT,
+                self.product.pickOffsetRaw,
+                DR_ELR_ZYX,
+            )
+            tp_log(
+                ">>> calculateStaticGridPosition: picking from pickIndex : "
+                + str(patternPointIndex)
+                + ", pickPose: "
+                + str(pickPose)
+                + ", offset: "
+                + str(self.product.pickOffsetRaw)
+            )
+
+            return pickPose
+        else:
+            if self.shouldPlaceFinishedProductOnSecondDrawer():
+                placePose = get_pattern_point(
+                    self.secondDrawerLeftFront,
+                    self.secondDrawerRightFront,
+                    self.secondDrawerRightBack,
+                    self.secondDrawerLeftBack,
+                    patternPointIndex,
+                    1,  # zig zag
+                    SECOND_DRAWER_AMOUNT_PRODUCT_Y,
+                    SECOND_DRAWER_AMOUNT_PRODUCT_X,
+                    SECOND_DRAWER_AMOUNT_PRODUCT_Z,
+                    FIN_PRODUCT_HEIGHT,
+                    self.product.placeOffsetFinished,
+                    DR_ELR_ZYX,
+                )
+            else:
+                placePose = get_pattern_point(
+                    self.mainDrawerLeftFront,
+                    self.mainDrawerRightFront,
+                    self.mainDrawerRightBack,
+                    self.mainDrawerLeftBack,
+                    patternPointIndex,
+                    1,  # zig zag
+                    DRAWER_AMOUNT_PRODUCT_Y,
+                    DRAWER_AMOUNT_PRODUCT_X,
+                    DRAWER_AMOUNT_PRODUCT_Z,
+                    FIN_PRODUCT_HEIGHT,
+                    self.product.placeOffsetFinished,
+                    DR_ELR_ZYX,
+                )
+            tp_log(
+                ">>> calculateStaticGridPosition: placeIndex : "
+                + str(patternPointIndex)
+                + "placePose: "
+                + str(placePose)
+                + ", offset: "
+                + str(self.product.placeOffsetFinished)
+            )
+            return placePose
+
+    def calculatePinnedGridPosition(
+        self, pick, height, diameter, length, width, x, y, z, xOffset, yOffset, zOffset
+    ):
+        if z >= DRAWER_AMOUNT_PRODUCT_Z:
+            z = DRAWER_AMOUNT_PRODUCT_Z - 1
+
+        if ROUND_PRODUCT:
+            pythagoras_obliquely = (diameter / 2) + \
+                (POSITIONING_PIN_DIAMETER / 2)
+            x_displacement = DISTANCE_POSITIONING_PINS / 2
+            y_square = pow(pythagoras_obliquely, 2) - pow(x_displacement, 2)
+            y_displacement = sqrt(y_square)
+        else:
+            # When working with rectangle products the center pos will be calculated here
+            x_displacement = length / 2
+            y_displacement = width / 2
+
+        if EQUAL_GRID or y % 2 == 0:
+            x_offset = POS_POSPIN1_X + x_displacement + GRID_X_OFFSET * x + xOffset
+        else:
+            x_offset = (
+                POS_POSPIN1_X
+                + x_displacement
+                + (0.5 * GRID_X_OFFSET)
+                + GRID_X_OFFSET * x
+                + xOffset
+            )
+
+        y_offset = POS_POSPIN1_Y + y_displacement + GRID_Y_OFFSET * y + yOffset
+
+        if pick:
+            z_offset = (
+                (height * (DRAWER_AMOUNT_PRODUCT_Z - z))
+                + zOffset
+                + GR1_CLAW_HEIGHT
+                - GR1_CLAW_DEPTH
+            )
+            head_orientation = 0
+        else:
+            if USE_SECOND_GRIPPER:
+                grClawDepth = GR2_CLAW_DEPTH
+                grClawHeight = GR2_CLAW_HEIGHT
+                head_orientation = 90
+            else:
+                grClawDepth = GR1_CLAW_DEPTH
+                grClawHeight = GR1_CLAW_HEIGHT
+                head_orientation = -90
+
+            z_offset = (
+                ((height - FIN_TOP_OFFSET) * (z + 1))
+                + zOffset
+                + grClawHeight
+                - grClawDepth
+            )
+
+        x_offset -= X_OFFSET_ORIGIN
+        y_offset -= Y_OFFSET_ORIGIN
+        z_offset -= Z_OFFSET_ORIGIN
+
+        x_offset += X_FIRST_SPOT
+        y_offset += Y_FIRST_SPOT
+
+        z = self._cobotLimits(x_offset, y_offset, z_offset)
+
+        return [x_offset, y_offset, z, 0, 0, head_orientation]
+
+    def shouldPlaceFinishedProductOnSecondDrawer(self):
+        return (
+            FEEDER_TYPE == EASY_LOADER
+            and GRID_TYPE == STATIC
+            and PLACE_FINISHED_PRODUCT_ON_SECOND_DRAWER
+        )
+
+    def canFillFirstSquareCompletely(self):
+        return (
+            IO_MODE == "INPUT"
+            or self.shouldPlaceFinishedProductOnSecondDrawer()
+            or PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION
+        )
+
+    def _cobotLimits(self, x, y, z):
+        cobotType = ROBOT_SERIAL[len(ROBOT_SERIAL) - 5:]
+
+        z_Offset = z
+        if cobotType == "M1013":
+            if x > 550:
+                pass
+        if cobotType == "M0617":
+            pass
+        if cobotType == "H2017":
+            pass
+        if cobotType == "M2515":
+            pass
+
+        return z_Offset
+
+    def requestNewDrawer(self):
+        self.state.setState("REQUEST_NEW_DRAWER")
+
+        self.cobot.waitTime(0.2)
+        DO_REQUEST_NEW_DRAWER.set(ON, 2.0, OFF)
+        # Wat als er geen nieuwe lade komt?
+
+        if DEBUG.WAIT_METALOADER_DRAWER_DIGITAL_INPUT:
+            DI_NEW_DRAWER_IS_REQUESTED.waitInput(ON)
+
+        self.state.xPick = 0
+        self.state.yPick = 0
+        self.state.zPick = 0
+        self.state.xPlace = 0
+        self.state.yPlace = 0
+        self.state.zPlace = 0
+        self.state.productsFabricatedOnCurrentDrawer = 0
+        self.state.productsPlacedOnCurrentDrawer = 0
+        self.state.productsPickedOnCurrentDrawer = 0
+        self.state.firstRawMaterialThatWasTakenFromDrawerIsInMachine = True
+
+        if self.state.totalProductsFabricated != 0:
+            self.state.drawerCount += 1
+
+        if GRID_TYPE == STATIC:
+            self.initSpots()
+
+        self.state.setState("NEW_DRAWER_RECEIVED")
+
+
+class Machine:
+    """Represents the CNC Machine"""
+
+    def __init__(self, state):
+        self.state = state
+
+    def openMainJaw(self):
+        DO_MAIN_SPINDLE_CLOSE.set(OFF)
+        DO_MAIN_SPINDLE_OPEN.set(ON)
+
+        if DEBUG.WAIT_OPEN_MAIN_JAW_DIGITAL_INPUT:
+            DI_MAIN_SPINDLE_IS_OPENED.waitInput(ON)
+        else:
+            self.waitTime(CLAW_WAIT_DEFAULT)
+        self.state.setState("MAIN_CLAW_OPENED")
+
+    def openSubJaw(self):
+        DO_SUB_SPINDLE_CLOSE.set(OFF)
+        DO_SUB_SPINDLE_OPEN.set(ON)
+
+        if DEBUG.WAIT_OPEN_SUB_JAW_DIGITAL_INPUT:
+            DI_SUB_SPINDLE_IS_OPENED.waitInput(ON)
+        else:
+            self.waitTime(CLAW_WAIT_DEFAULT)
+        self.state.setState("SUB_CLAW_OPENED")
+
+    def closeMainJaw(self):
+        DO_MAIN_SPINDLE_OPEN.set(OFF)
+        DO_MAIN_SPINDLE_CLOSE.set(ON)
+
+        if DEBUG.WAIT_CLOSE_MAIN_JAW_DIGITAL_INPUT:
+            DI_MAIN_SPINDLE_IS_CLOSED.waitInput(ON)
+        else:
+            self.waitTime(CLAW_WAIT_DEFAULT)
+        self.state.setState("MAIN_CLAW_CLOSED")
+
+    def closeSubJaw(self):
+        DO_SUB_SPINDLE_OPEN.set(OFF)
+        DO_SUB_SPINDLE_CLOSE.set(ON)
+
+        if DEBUG.WAIT_CLOSE_SUB_JAW_DIGITAL_INPUT:
+            DI_SUB_SPINDLE_IS_OPENED.waitInput(ON)
+        else:
+            self.waitTime(CLAW_WAIT_DEFAULT)
+        self.state.setState("SUB_CLAW_CLOSED")
+
+    def run(self):
+        self.state.setState("RUN_MACHINE")
+
+        if DEBUG.RUN_MACHINE:
+            DO_RUN_MACHINE.set(ON, 2.0, OFF)
+
+    def waitForMachineCall(self):
+        self.state.setState("WAIT_MACHINE_CALL")
+
+        if DEBUG.WAIT_FOR_COBOT_IS_CALLED:
+            DI_COBOT_IS_CALLED.waitInput(ON)
+
+        # When `waitForMachineCall()` is called and the mode is INPUT
+        # we know that the machine is empty:
+        if IO_MODE == INPUT:
+            self.state.mainSpindleStatus = EMPTY
+            self.state.subSpindleStatus = EMPTY
+        # When `waitForMachineCall()` is called and we have placed
+        # a raw material in the machine. This means that the machine
+        # has now produced a finished product. So we need to update
+        # the status of the main- and sub spindle.
+        #
+        # If the mode is OUTPUT we also know that the machine called
+        # us to pickup a finished product.
+        elif self.state.mainSpindleStatus == RAW or IO_MODE == OUTPUT:
+            # If we have a sub spindle it will now contain the
+            # finished material.
+            if USE_SUB_SPINDLE:
+                self.state.mainSpindleStatus = EMPTY
+                self.state.subSpindleStatus = FINISHED
+            else:
+                self.state.mainSpindleStatus = FINISHED
+        else:
+            # If we wait for the machine call and no raw material has
+            # been placed yet. This means this is the first raw product
+            # from the drawer we are going to insert into the machine.
+            #
+            # In this case we do not have to update the status of the
+            # main- and sub spindle.
+            pass
+
+        self.state.setState("MACHINE_CALL_GIVEN")
+
+    def waitForDoorOpened(self):
+        self.state.setState("WAIT_DOOR_OPEN")
+
+        if DEBUG.WAIT_FOR_DOOR_DIGITAL_INPUT:
+            DI_DOOR_IS_OPENED.waitInput(ON)
+
+        self.state.setState("MACHINE_DOOR_OPEN")
+
+    def waitTime(self, seconds):
+        if DEBUG.WAIT == False:
+            return
+        wait(seconds)
+
+
+class Product:
+    """Represents the raw and finshed product"""
+
+    def __init__(self):
+        # Calculate just once
+        self.centerOfGravityRaw = self._calculateCenterOfGravityRaw()
+        self.centerOfGravityFinished = self._calculateCenterOfGravityFinished()
+
+        self.pickOffsetRaw = self._calculatePickOffsetRaw()
+        self.placeOffsetFinished = self._calculatePlaceOffsetFinished()
+
+        self.finProductWeight = self._calculateFinProductWeight()
+        self.rawProductWeight = self._calculateRawProductWeight()
+
+    def _calculateCenterOfGravityRaw(self):
+        """
+        Calculate center of gravity for a "raw" product
+        """
+
+        # TODO: Check if this is right with all them weird offsets floating around
+
+        cogz = RAW_MAT_HEIGHT / 2 + GR1_CLAW_HEIGHT - GR1_CLAW_DEPTH
+
+        cog = [0.0, 0.0, cogz]
+        return cog
+
+    def _calculateCenterOfGravityFinished(self):
+        """
+        Center of gravity for a "finished" product
+        """
+
+        # TODO: Check if this is right with all them weird offsets floating around
+        # NOTE: this is a guestimation, because we can't predict the shape of the finished product.
+
+        if USE_SECOND_GRIPPER:
+            cogz = FIN_PRODUCT_HEIGHT / 2 + GR2_CLAW_HEIGHT - GR2_CLAW_DEPTH
+        else:
+            cogz = FIN_PRODUCT_HEIGHT / 2 + GR1_CLAW_HEIGHT - GR1_CLAW_DEPTH
+        cog = [0.0, 0.0, cogz]
+        return cog
+
+    def _calculatePickOffsetRaw(self):
+        """Calculates the pick offset for a raw material"""
+        height = RAW_MAT_HEIGHT
+
+        if ROUND_PRODUCT:
+            length = RAW_MAT_DIAMETER
+            width = RAW_MAT_DIAMETER
+        else:
+            length = RAW_MAT_LENGTH
+            width = RAW_MAT_WIDTH
+
+        return [
+            # Dit moet nog aangepast worden voor posities op de tafel moeten we een Kalibratie tool gaan gebruiken dit zorgt voor vaste waardes
+            (length - 17.5) / 2
+            # product length is in x-direction of grid
+            + DRAWER_PICK_OFFSET_X + DRAWER_CORNER_OFFSET,
+            (width - 17.5) / 2
+            # product width is in y-direction of grid
+            # 17.5mm is de diameter van de kalibratie tool tov TCP
+            + DRAWER_PICK_OFFSET_Y + DRAWER_CORNER_OFFSET,
+            # height difference from product
+            # 73.9mm is de lengte van de kalibratie tool tov TCP
+            (height - 73.9)
+            + (GR1_CLAW_HEIGHT - GR1_CLAW_DEPTH)
+            + DRAWER_PICK_OFFSET_Z,
+        ]
+
+    def _calculatePlaceOffsetFinished(self):
+        """Calculates the place offset for a finished product"""
+        height = FIN_PRODUCT_HEIGHT
+
+        if ROUND_PRODUCT:
+            length = FIN_PRODUCT_DIAMETER
+            width = FIN_PRODUCT_DIAMETER
+        else:
+            length = FIN_PRODUCT_LENGTH
+            width = FIN_PRODUCT_WIDTH
+
+        if USE_SECOND_GRIPPER:
+            # place with second gripper
+            clawHeight = GR2_CLAW_HEIGHT
+            clawDepth = GR2_CLAW_DEPTH
+        else:  # place with first gripper
+            clawHeight = GR1_CLAW_HEIGHT
+            clawDepth = GR1_CLAW_DEPTH
+        if PLACE_FINISHED_PRODUCT_ON_SECOND_DRAWER and USE_SECOND_GRIPPER:
+            TeachedInConfigHeight = TEACH_CONFIG_GR_FINISHED_HEIGHT
+            TeachedInConfigDepth = TEACH_CONFIG_GR_FINISHED_DEPTH
+        else:
+            TeachedInConfigHeight = TEACH_CONFIG_GR_RAW_HEIGHT
+            TeachedInConfigDepth = TEACH_CONFIG_GR_RAW_DEPTH
+
+        return [
+            # Dit moet nog aangepast worden voor posities op de tafel moeten we een Kalibratie tool gaan gebruiken dit zorgt voor vaste waardes
+            (length - 17.5) / 2
+            # product length is in x-direction of grid
+            + DRAWER_PLACE_OFFSET_X + DRAWER_CORNER_OFFSET,
+            (width - 17.5) / 2
+            # 17.5mm is de diameter van de kalibratie tool tov TCP
+            # product width is in y-direction of grid
+            + DRAWER_PLACE_OFFSET_Y + DRAWER_CORNER_OFFSET,
+            # height difference from product
+            (height - 73.9)
+            + (clawHeight - clawDepth)
+            # 73.9mm is de lengte van de kalibratie tool tov TCP
+            + DRAWER_PLACE_OFFSET_Z + DRAWER_CORNER_OFFSET,
+        ]
+
+    def _calculateFinProductWeight(self):
+        rawAndFinishedProductWeight = RAW_MAT_WEIGHT + FIN_PRODUCT_WEIGHT
+        maxCarryWeight = CARRY_WEIGHT - TOOL_WEIGHT
+
+        # Indien ruw product en finished product met de tool samen onder de 11 kg zitten wordt finished product gewicht afgerond onder de 10 zodat set tool weight niet teveel aangeeft mag maar tot 10kg
+        if (maxCarryWeight < rawAndFinishedProductWeight) and ((maxCarryWeight + 1) > rawAndFinishedProductWeight):
+            finProductWeight = maxCarryWeight - RAW_MAT_WEIGHT - 0.1
+            return finProductWeight
+        else:
+            if (maxCarryWeight < FIN_PRODUCT_WEIGHT):
+                return maxCarryWeight - 0.1
+            return FIN_PRODUCT_WEIGHT
+
+    def _calculateRawProductWeight(self):
+        maxCarryWeight = CARRY_WEIGHT - TOOL_WEIGHT
+
+        if maxCarryWeight < RAW_MAT_WEIGHT:
+            rawProductWeight = maxCarryWeight - 0.1
+            return rawProductWeight
+        else:
+            return RAW_MAT_WEIGHT
+
+
+class Gripper:
+    """Represents both grippers"""
+
+    def __init__(self, state, cobot, product):
+        self.state = state
+        self.cobot = cobot
+        self.product = product
+
+    def openGripper1(self):
+        DO_GRIPPER1_CLOSE.set(OFF)
+        DO_GRIPPER1_OPEN.set(ON)
+
+        if Debug.WAIT_FOR_DI_GRIPPER_OPENED:
+            # TODO: Jacco: Add some kind of timeout? That's probably not possible like this?
+            # Maarten: `wait_digital_input` accepts a timeout so it is possible to pass it along.
+            DI_GRIPPER1_IS_OPENED.waitInput(ON)
+        else:
+            self.cobot.waitTime(GRIPPER_WAIT_DEFAULT)
+        self.state.setState("GRIPPER_1_OPENED")
+
+    def openGripper2(self):
+        DO_GRIPPER2_CLOSE.set(OFF)
+        DO_GRIPPER2_OPEN.set(ON)
+
+        if Debug.WAIT_FOR_DI_GRIPPER_OPENED:
+            # TODO: Jacco: Add some kind of timeout? That's probably not possible like this?
+            # Maarten: `wait_digital_input` accepts a timeout so it is possible to pass it along.
+            DI_GRIPPER2_IS_OPENED.waitInput(ON)
+        else:
+            self.cobot.waitTime(GRIPPER_WAIT_DEFAULT)
+        self.state.setState("GRIPPER_2_OPENED")
+
+    def closeGripper1(self):
+        DO_GRIPPER1_OPEN.set(OFF)
+        DO_GRIPPER1_CLOSE.set(ON)
+        self.cobot.waitTime(GRIPPER_WAIT_DEFAULT)
+        self.state.setState("GRIPPER_1_CLOSED")
+
+    def closeGripper2(self):
+        DO_GRIPPER2_OPEN.set(OFF)
+        DO_GRIPPER2_CLOSE.set(ON)
+        self.cobot.waitTime(GRIPPER_WAIT_DEFAULT)
+        self.state.setState("GRIPPER_2_CLOSED")
+
+    def isGripper1Holding(self):
+        if DI_GRIPPER1_IS_OPENED.get() == ON:
+            return False
+
+        if DI_GRIPPER1_IS_CLOSED.get() == ON:
+            return False
+
+        return True
+
+    def isGripper2Holding(self):
+        if DI_GRIPPER2_IS_OPENED.get() == ON:
+            return False
+
+        if DI_GRIPPER2_IS_CLOSED.get() == ON:
+            return False
+
+        return True
+
+    def resetWorkpieceWeight(self):
+        tp_log("set workpiece weight to 0")
+        set_tcp(GRIPPER_1_TCP)
+        set_workpiece_weight(
+            weight=0,
+            # weight is zero so no center of gravity is required
+            cog=[0.0, 0.0, 0.0],
+            cog_ref=DR_CUR_TCP,
+            add_up=DR_REPLACE,
+            start_time=None,
+            transition_time=None,
+        )
+
+    def addFinishedProductWeight(self, finProductWeight):
+        tp_log("set workpiece weight finProductWeight = " + str(finProductWeight))
+
+        set_workpiece_weight(
+            weight=finProductWeight,
+            cog=self.product.centerOfGravityFinished,
+            cog_ref=DR_CUR_TCP,
+            add_up=DR_ADD,
+            start_time=None,
+            transition_time=None,
+        )
+
+    def removeFinishedProductWeight(self, finProductWeight):
+        tp_log("set workpiece weight remove finProductWeight = " +
+               str(finProductWeight))
+
+        set_workpiece_weight(
+            weight=finProductWeight,
+            cog=self.product.centerOfGravityFinished,
+            cog_ref=DR_CUR_TCP,
+            add_up=DR_REMOVE,
+            start_time=None,
+            transition_time=None,
+        )
+
+    def addRawProductWeight(self, rawProductWeight):
+        tp_log("set workpiece weight RawProductWeight = " + str(rawProductWeight))
+
+        set_workpiece_weight(
+            weight=rawProductWeight,
+            cog=self.product.centerOfGravityRaw,
+            cog_ref=DR_CUR_TCP,
+            add_up=DR_ADD,
+            start_time=None,
+            transition_time=None,
+        )
+
+    def removeRawProductWeight(self, rawProductWeight):
+        tp_log("set workpiece weight remove RawProductWeight = " +
+               str(rawProductWeight))
+
+        set_workpiece_weight(
+            weight=rawProductWeight,
+            cog=self.product.centerOfGravityRaw,
+            cog_ref=DR_CUR_TCP,
+            add_up=DR_REMOVE,
+            start_time=None,
+            transition_time=None,
+        )
+
+# endregion
+
+# MACHINE TENDING PROCESS PHASES
+# region phases
+
+
+class ConfigureMachine:
+    """
+    Configures the ProgramState based on the configuration of the
+    cobot and the CNC machine.
+
+    Next: DetermineStart
+    """
+
+    def __init__(self, state):
+        self.state = state
+        self.machine = state.machine
+        self.cobot = state.cobot
+        self.drawer = state.drawer
+
+    def maxWeightTwoGrippersExeedsLimit(self):
+        rawAndFinishedProductWeight = RAW_MAT_WEIGHT + FIN_PRODUCT_WEIGHT
+        if MAX_CARRY_WEIGHT < rawAndFinishedProductWeight:
+            tp_log("we gaan nu gewoon 2 grijpers tegelijk gebruiken")
+
+            return True
+        else:
+            tp_log("we gaan 1 grijper tegelijk gebruiken")
+            return False
+
+    def run(self):
+        self.state.setState("CONFIGURE_MACHINE")
+
+        self.state.hasDrawerSystem = FEEDER_TYPE == META_LOADER
+
+        # Reset all outputs
+        DO_GRIPPER1_OPEN.set(OFF)
+        DO_GRIPPER1_CLOSE.set(OFF)
+        DO_GRIPPER2_OPEN.set(OFF)
+        DO_GRIPPER2_CLOSE.set(OFF)
+        DO_AIRPURGE.set(OFF)
+        DO_MAIN_SPINDLE_OPEN.set(OFF)
+        DO_MAIN_SPINDLE_CLOSE.set(OFF)
+        DO_SUB_SPINDLE_OPEN.set(OFF)
+        DO_SUB_SPINDLE_CLOSE.set(OFF)
+        DO_RUN_MACHINE.set(OFF)
+
+        # Only reset if we have a drawer system such as a MetaLoader
+        # because the "DO_REQUEST_NEW_DRAWER" can be -1 at this point.
+        if self.state.hasDrawerSystem:
+            DO_REQUEST_NEW_DRAWER.set(OFF)
+
+        # Determine which of the archetypes is true, not we only
+        # check for USE_ not HAS_ since React checks for this.
+        if USE_SUB_SPINDLE and USE_SECOND_GRIPPER:
+            self.state.configMachine = TWO_SPINDLES_TWO_GRIPPERS
+        elif USE_SUB_SPINDLE == False and USE_SECOND_GRIPPER:
+            if self.maxWeightTwoGrippersExeedsLimit():
+                tp_log("gewicht van product in beide grippers is te hoog")
+                self.state.configMachine = ONE_SPINDLE_ONE_GRIPPER
+            else:
+                tp_log("gewicht van product in beide grippers is prima")
+                self.state.configMachine = ONE_SPINDLE_TWO_GRIPPERS
+        elif USE_SUB_SPINDLE and USE_SECOND_GRIPPER == False:
+            self.state.configMachine = TWO_SPINDLES_ONE_GRIPPER
+        else:
+            self.state.configMachine = ONE_SPINDLE_ONE_GRIPPER
+
+        tp_log(">> configuration archetype: " + self.state.configMachine)
+
+        self.cobot.moveHome()
+
+        set_tcp(GRIPPER_1_TCP)
+
+        self.state.changePhase(DETERMINE_START_PHASE)
+
+
+class ExitProgram:
+    """
+    Finish the program.
+    """
+
+    def __init__(self, state):
+        state.assignDomainHelpers(self)
+
+    def run(self):
+        self.cobot.moveHome()
+
+        self.state.setState("TOTAL_FINISHED")
+
+        self.state.keepRunning = False
+
+
+class DetermineStart:
+    """
+    Determines what to do when the process of machine tending
+    is started, based on whether a normal start or restart
+    is attempted.
+
+    Next: PickRawMaterialFromDrawer, PickFinishedProductFromMachine
+    """
+
+    def __init__(self, state):
+        state.assignDomainHelpers(self)
+
+    def run(self):
+        self.state.setState("DETERMINE_START")
+
+        if self._isNormalStart():
+            tp_log(">> starting normally")
+
+            self.state.setState("NORMAL_START")
+
+            self.state.setState("GRIPPER_CHECK")
+
+            if DEBUG.PERFORM_GRIPPER_CHECKS:
+                if self.gripper.isGripper1Holding():
+                    if DEBUG.USE_PYTHON_MODE:
+                        tp_popup("Gripper1 : {0}".format("Gripper 1 is Open"))
+                        self.gripper.openGripper1()
+                    else:
+                        self.state.setState("GRIPPER1_CHECK_FAILED")
+                        self.state.keepRunning = False
+                        return
+
+                if HAS_SECOND_GRIPPER and self.gripper.isGripper2Holding():
+                    if DEBUG.USE_PYTHON_MODE:
+                        tp_popup("Gripper2 : {0}".format("Gripper 2 is Open"))
+                        self.gripper.openGripper2()
+                    else:
+                        self.state.setState("GRIPPER2_CHECK_FAILED")
+                        self.state.keepRunning = False
+                        return
+
+            set_tool(TOOL_WEIGHT_NAME)
+
+            self.gripper.resetWorkpieceWeight()
+
+            self.state.setState("START_FROM_FIRST_POS")
+
+            if self.state.hasDrawerSystem:
+                if IO_MODE == OUTPUT and PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION:
+                    # When only outputting and placing on the drop off position the
+                    # drawer system is completely ignored: nothing is picked up from
+                    # the drawer and nothing is placed back.
+                    pass
+                else:
+                    self.drawer.requestNewDrawer()
+            elif GRID_TYPE == STATIC:
+                self.drawer.initSpots()
+
+            if IO_MODE == INPUT_OUTPUT:
+                self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+            elif IO_MODE == OUTPUT:
+                self.machine.waitForMachineCall()
+                self.cobot.moveFromDrawerToMachine()
+                self.machine.waitForDoorOpened()
+                self.state.changePhase(
+                    PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+            else:
+                self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+        else:
+            tp_log(">> restarting previous run")
+
+            self.state.setState("CONTINUE_PROGRAM")
+
+            if DEBUG.USE_PYTHON_MODE:
+                self.totalProductsFabricated = 0
+                self.state.productsFabricatedOnCurrentDrawer = 0
+                self.state.xPick = 0
+                self.state.yPick = 0
+                self.state.zPick = 0
+                self.state.xPlace = 0
+                self.state.yPlace = 0
+                self.state.zPlace = 0
+            else:
+                self.state = PREVIOUS_STATE["state"]
+                self.productsToFabricate = PREVIOUS_STATE["productsToFabricate"]
+                self.productsFabricatedOnCurrentDrawer = PREVIOUS_STATE[
+                    "productsFabricatedOnCurrentDrawer"
+                ]
+                self.productsPlacedOnCurrentDrawer = PREVIOUS_STATE[
+                    "productsPlacedOnCurrentDrawer"
+                ]
+                self.productsPickedOnCurrentDrawer = PREVIOUS_STATE[
+                    "productsPickedOnCurrentDrawer"
+                ]
+                self.xPick = PREVIOUS_STATE["xPick"]
+                self.yPick = PREVIOUS_STATE["yPick"]
+                self.zPick = PREVIOUS_STATE["zPick"]
+                self.xPlace = PREVIOUS_STATE["xPlace"]
+                self.yPlace = PREVIOUS_STATE["yPlace"]
+                self.zPlace = PREVIOUS_STATE["zPlace"]
+                self.drawerCount = PREVIOUS_STATE["drawerCount"]
+                self.firstRawMaterialThatWasTakenFromDrawerIsInMachine = PREVIOUS_STATE[
+                    "firstRawMaterialThatWasTakenFromDrawerIsInMachine"
+                ]
+                self.pickupFails = PREVIOUS_STATE["pickupFails"]
+                self.totalProductsFabricated = PREVIOUS_STATE["totalProductsFabricated"]
+                self.mainSpindleStatus = PREVIOUS_STATE["mainSpindleStatus"]
+                self.subSpindleStatus = PREVIOUS_STATE["subSpindleStatus"]
+                self.gripper1Status = PREVIOUS_STATE["gripper1Status"]
+                self.gripper2Status = PREVIOUS_STATE["gripper2Status"]
+
+            if self.state.hasDrawerSystem and self._useCurrentDrawer() == False:
+                self.drawer.requestNewDrawer()
+
+            if self._doesMachineContainProduct():
+                self.state.setState("FIN_PRODUCT_IN_MACHINE")
+
+                if USE_SUB_SPINDLE:
+                    self.subSpindleStatus = "FINISHED"
+                else:
+                    self.mainSpindleStatus = "FINISHED"
+
+                if (IO_MODE != OUTPUT) and (
+                    self.state.configMachine != ONE_SPINDLE_ONE_GRIPPER
+                ):
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+                else:
+                    self.machine.waitForMachineCall()
+                    self.cobot.moveFromDrawerToMachine()
+                    self.machine.waitForDoorOpened()
+                    self.state.changePhase(
+                        PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+            else:
+                self.state.setState("MACHINE_EMPTY")
+
+                if IO_MODE != OUTPUT:
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+                else:
+                    self.machine.waitForMachineCall()
+                    self.cobot.moveFromDrawerToMachine()
+                    self.machine.waitForDoorOpened()
+                    self.state.changePhase(
+                        PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+
+    def _isNormalStart(self):
+        if DEBUG.USE_PYTHON_MODE:
+            return tp_get_user_input(
+                "Wil je Opnieuw Starten (True) of Doorgaan (False)? ",
+                input_type=DR_VAR_BOOL,
+            )
+        else:
+            return NORMAL_START
+
+    def _doesMachineContainProduct(self):
+        if DEBUG.USE_PYTHON_MODE:
+            return tp_get_user_input(
+                "Zit er een afgerond product in de machine (True) of Doorgaan (False)? ",
+                input_type=DR_VAR_BOOL,
+            )
+        else:
+            return MACHINE_CONTAINS_PRODUCT
+
+    def _useCurrentDrawer(self):
+        if DEBUG.USE_PYTHON_MODE:
+            return tp_get_user_input(
+                "Moet de Cobot doorgaan vanaf de huidige lade (False), of beginnen met een nieuwe lade (True)? ",
+                input_type=DR_VAR_BOOL,
+            )
+        else:
+            return USE_CURRENT_DRAWER
+
+
+class PickRawMaterialFromDrawer:
+    """
+    Picks up a raw product / drawer from the drawer.
+
+    Next: ExitProgram, PlaceRawMaterialInMachine, PickFinishedProductFromMachine
+    """
+
+    def __init__(self, state):
+        state.assignDomainHelpers(self)
+
+    def run(self):
+        self.state.setState("PICK_PRODUCT_DRAWER")
+
+        tp_log(">> pick raw material from drawer " + self.state.getProgress())
+
+        tp_log(">> moving gripper 1 to drawer position -> GRIPPER1_AT_DRAWER_POSITION")
+        self.cobot.movejHigh(GRIPPER1_AT_DRAWER_POSITION)
+
+        set_tcp(GRIPPER_1_TCP)
+
+        pickPos = None
+        if GRID_TYPE == STATIC:
+            pickPos = self.drawer.nextPickPosition()
+        else:
+            if (
+                DRAWER_AMOUNT_PRODUCT_Z > 1
+                and self.state.productsFabricatedOnCurrentDrawer == 0
+            ):
+                z = 1
+            else:
+                z = self.state.zPick
+
+            pickPos = self.drawer.calculatePinnedGridPosition(
+                True,
+                RAW_MAT_HEIGHT,
+                RAW_MAT_DIAMETER,
+                RAW_MAT_LENGTH,
+                RAW_MAT_WIDTH,
+                self.state.xPick,
+                self.state.yPick,
+                z,
+                DRAWER_PICK_OFFSET_X,
+                DRAWER_PICK_OFFSET_Y,
+                DRAWER_PICK_OFFSET_Z,
+            )
+
+        tp_log(">> pick position: " + str(pickPos))
+
+        if DISTANCE_POSITIONING_PINS <= 50 and GRID_TYPE == PINNED:
+            # TODO: check this, this seems like a band-aid, and dependant on gripper config.
+            pickPos = trans(pickPos, [0, 0, 0, 0, 0, 60], DR_TOOL)
+
+        # Calculate offset height so the cobot will always move over the pile of products when wanting to pick the lowest product
+        zArriveOffset = (DRAWER_AMOUNT_PRODUCT_Z * RAW_MAT_HEIGHT) + 50
+
+        if zArriveOffset < 100:
+            zArriveOffset = 100
+
+        # JACCO: Changed to User coordinates!
+        pickPosArrive = trans(
+            pickPos,
+            [0, 0, zArriveOffset, 0, 0, 0],
+            DRAWER_COORDINATE_SYSTEM,
+            DRAWER_COORDINATE_SYSTEM,
+        )
+        pickPosLeave1 = trans(
+            pickPos,
+            [0, 5, 10, 0, 0, 0],
+            DRAWER_COORDINATE_SYSTEM,
+            DRAWER_COORDINATE_SYSTEM,
+        )
+        pickPosLeave2 = trans(
+            pickPos,
+            [5, 5, zArriveOffset, 0, 0, 0],
+            DRAWER_COORDINATE_SYSTEM,
+            DRAWER_COORDINATE_SYSTEM,
+        )
+
+        tp_log(
+            ">> moving to pick up raw material from drawer arrive position using ref= "
+            + str(DRAWER_COORDINATE_SYSTEM)
+        )
+
+        self.cobot.movelNormal(pickPosArrive, ref=DRAWER_COORDINATE_SYSTEM)
+        self.gripper.openGripper1()
+
+        tp_log(">> moving to pick up raw material from drawer position")
+        self.cobot.movelSlow(pickPos, ref=DRAWER_COORDINATE_SYSTEM)
+
+        self.gripper.closeGripper1()
+
+        self._incrementPickPosition()
+
+        tp_log(">> moving to pick up raw material from drawer leave 1 position")
+        self.cobot.movelNormal(
+            pickPosLeave1, ref=DRAWER_COORDINATE_SYSTEM, r=10)
+        tp_log(">> moving to pick up raw material from drawer leave 2 position")
+        self.cobot.movelNormal(pickPosLeave2, ref=DRAWER_COORDINATE_SYSTEM)
+        self.cobot.movejHigh(GRIPPER1_AT_DRAWER_POSITION)
+
+        if (
+            DEBUG.CHECK_IF_COBOT_HAS_FEEDBACK_ON_PICK == False
+            or self.gripper.isGripper1Holding()
+        ):
+            self.state.gripper1Status = RAW
+            self.gripper.addRawProductWeight(self.product.rawProductWeight)
+
+            # Wait for the machine to be called, when the pick has failed
+            # previously the wait is already over, but since the signal
+            # is still on the waits are instant.
+            self.state.setState("PRODUCT_PICKED_FROM_DRAWER")
+            self.machine.waitForMachineCall()
+            self.cobot.moveFromDrawerToMachine()
+            self.machine.waitForDoorOpened()
+
+            if IO_MODE == "INPUT":
+                self.state.changePhase(PLACE_RAW_MATERIAL_IN_MACHINE_PHASE)
+            elif IO_MODE == INPUT_OUTPUT or IO_MODE == OUTPUT:
+                if self.state.configMachine == TWO_SPINDLES_TWO_GRIPPERS:
+                    self.state.changePhase(PLACE_RAW_MATERIAL_IN_MACHINE_PHASE)
+
+                elif self.state.configMachine == ONE_SPINDLE_ONE_GRIPPER:
+                    self.state.changePhase(PLACE_RAW_MATERIAL_IN_MACHINE_PHASE)
+
+                elif self.state.configMachine == ONE_SPINDLE_TWO_GRIPPERS:
+                    if (
+                        self.state.mainSpindleStatus == FINISHED
+                        or self.state.subSpindleStatus == FINISHED
+                    ):
+                        self.state.changePhase(
+                            PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+                    else:
+                        self.state.changePhase(
+                            PLACE_RAW_MATERIAL_IN_MACHINE_PHASE)
+
+                elif self.state.configMachine == TWO_SPINDLES_ONE_GRIPPER:
+                    self.state.changePhase(PLACE_RAW_MATERIAL_IN_MACHINE_PHASE)
+        else:
+            self.state.gripper1Status = EMPTY
+
+            self.state.incrementFabrication()
+            self.state.pickupFails += 1
+            self.state.setState("PICK_FROM_DRAWER_FAILED")
+
+            if IO_MODE == INPUT_OUTPUT:
+                if self.state.productsToFabricate <= 0:
+                    self.state.changePhase(EXIT_PROGRAM_PHASE)
+                elif (
+                    self.state.mainSpindleStatus == RAW
+                    and self.state.isFabricatingLastItemOnDrawer()
+                ):
+                    self.machine.waitForMachineCall()
+                    self.cobot.moveFromDrawerToMachine()
+                    self.machine.waitForDoorOpened()
+                    self.state.changePhase(
+                        PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+                elif self.state.isDrawerFinished():
+                    self.cobot.moveFromDrawerToHome()
+                    self.drawer.requestNewDrawer()
+                    self.state.rerunPhase()
+                else:
+                    self.state.rerunPhase()
+
+            elif IO_MODE == INPUT:
+                if self.state.productsToFabricate <= 0:
+                    self.state.changePhase(EXIT_PROGRAM_PHASE)
+                elif self.state.isDrawerFinished():
+                    self.cobot.moveFromDrawerToHome()
+                    self.drawer.requestNewDrawer()
+                    self.state.rerunPhase()
+                else:
+                    self.state.rerunPhase()
+
+    def _incrementPickPosition(self):
+        tp_log(">> incrementing pick positions and counters")
+        self.state.productsPickedOnCurrentDrawer += 1
+
+        tp_log(
+            ">>> inc productsPickedOnCurrentDrawer: "
+            + str(self.state.productsPickedOnCurrentDrawer)
+        )
+
+        if (
+            DRAWER_AMOUNT_PRODUCT_Z > 1
+            and self.state.productsFabricatedOnCurrentDrawer == 0
+        ):
+            self.state.xPick += 1
+        else:
+            self.state.zPick += 1
+
+        if self.state.zPick >= DRAWER_AMOUNT_PRODUCT_Z:
+            self.state.zPick = 0
+            self.state.xPick += 1
+
+        # Equal grid is a grid where the products are all in line unEqual grid(EQUAL_GRID == false) the uneven rows are half way of the grid offset.
+        if EQUAL_GRID == False and self.state.yPick % 2 == 1:
+            if self.state.xPick >= DRAWER_AMOUNT_PRODUCT_X - 1:
+                self.state.xPick = 0
+                self.state.yPick += 1
+        else:
+            if self.state.xPick >= DRAWER_AMOUNT_PRODUCT_X:
+                self.state.xPick = 0
+                self.state.yPick += 1
+
+        if self.state.yPick >= DRAWER_AMOUNT_PRODUCT_Y:
+            self.state.yPick = 0
+
+        tp_log(
+            ">>> inc pick { x: "
+            + str(self.state.xPick)
+            + ", y: "
+            + str(self.state.yPick)
+            + ", z:"
+            + str(self.state.zPick)
+            + " }"
+        )
+
+
+class PlaceRawMaterialInMachine:
+    """
+    Places the raw material in the machine, does airpurges,
+    force pushes etc.
+
+    Next: ExitProgram, PickRawMaterialFromDrawer, PickFinishedProductFromMachine, PlaceFinishedProductOnDrawer, PlaceFinishedProductOnDropOffPosition
+    """
+
+    def __init__(self, state):
+        state.assignDomainHelpers(self)
+
+    def run(self):
+        self.state.setState("PLACE_RAW_PRODUCT")
+
+        tp_log(">> place raw material in machine " + self.state.getProgress())
+
+        if AIRPURGE_BEFORE_INFEED:
+            self.cobot.airpurge(
+                "AIRPURGE_BEFORE_INFEED",
+                MAIN_CLAW_POSITION,
+                # AIRPURGE_AT_MAIN_CLAW,
+                PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_MAIN_CLAW,
+            )
+
+        self.state.setState("PLACE_PRODUCT_MACHINE")
+
+        set_tcp(GRIPPER_1_TCP)
+
+        tp_log(
+            ">> moving from outside machine door to place raw material in machine positions -> PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_MAIN_CLAW"
+        )
+        self.cobot.movejPath(
+            PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_MAIN_CLAW)
+
+        placePos = posx(MAIN_CLAW_POSITION, ori_type=DR_ELR_ZYX)
+        tp_log("Main claw position = " + str(MAIN_CLAW_POSITION))
+        # placePos = posx(MACHINE_PLACE_POSITION, ori_type=DR_ELR_ZYX)
+
+        # JACCO: The amount of things here is ridiculous
+        # is it really necessary to calculate an offset using 11 variables?
+        zOffset = (
+            - MACHINE_PLACE_DEPTH_OFFSET
+            - RAW_MAT_HEIGHT
+            + TEACH_CONFIG_MAIN_CLAW_PRODUCT_HEIGHT
+            + MAIN_CLAW_DEPTH
+            - TEACH_CONFIG_PLACE_SPINDLE_DEPTH
+            - MAIN_CLAW_HEIGHT
+            + TEACH_CONFIG_PLACE_SPINDLE_HEIGHT
+            + GR1_CLAW_DEPTH
+            - TEACH_CONFIG_GR_RAW_DEPTH
+            - GR1_CLAW_HEIGHT
+            + TEACH_CONFIG_GR_RAW_HEIGHT
+        )
+
+        placePos = trans(placePos, [0, 0, zOffset, 0, 0, 0], DR_TOOL)
+
+        # Since the cobot cant hold his position with different weights we should make a calculation for a height offset.(IN PROGRESS)
+
+        placePos = trans(
+            placePos, [0, 0, MACHINE_PLACE_HEIGHT_OFFSET, 0, 0, 0])
+
+        placePosArrive = trans(
+            placePos, [0, 0, -MAIN_CLAW_DEPTH - 20, 0, 0, 0], DR_TOOL
+        )
+        placePosBeforeClaw = trans(
+            placePos, [0, 0, -MAIN_CLAW_DEPTH - 2, 0, 0, 0], DR_TOOL
+        )
+        placePosBeforeProduct = trans(
+            placePos, [0, 0, -GR1_CLAW_DEPTH - 2, 0, 0, 0], DR_TOOL
+        )
+        placePosForce = trans(placePos, [0, 0, -2, 0, 0, 0], DR_TOOL)
+        placePosLeave = trans(
+            placePos, [0, 0, -GR1_CLAW_DEPTH - 20, 0, 0, 0], DR_TOOL)
+
+        tp_log(">> moving to place raw material in machine arrive position")
+        self.cobot.movelNormal(placePosArrive, r=10, ref=DR_BASE)
+        self.machine.openMainJaw()
+
+        # FORCE_INFEED means we're going to push into the claw immediately.
+        # Pushing after placing is done in "_normalInfeed()" !!
+        if FORCE_INFEED:
+            self._forceInfeed(placePosBeforeClaw, placePos)
+        else:
+            self._normalInfeed(placePos)
+
+        self.state.gripper1Status = EMPTY
+
+        release_compliance_ctrl()
+
+        self.gripper.removeRawProductWeight(self.product.rawProductWeight)
+
+        # Push against product while chuck is closed during pushing open and close chuck
+        if PUSH_AFTER_PLACE:
+            self._pushAfterPlace(placePosBeforeProduct)
+
+        tp_log(">> moving to place raw material in machine leave position")
+        self.cobot.movelNormal(placePosLeave, ref=DR_BASE)
+
+        self.state.mainSpindleStatus = RAW
+
+        self.state.setState("PRODUCT_PLACED_IN_MACHINE")
+
+        self._resetPlaceBits()
+
+        tp_log(
+            ">> moving from machine place position to outside machine door -> reversed PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_MAIN_CLAW"
+        )
+        self.cobot.movejPath(
+            list(reversed(PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_MAIN_CLAW)),
+        )
+
+        if IO_MODE == INPUT_OUTPUT:
+            if (
+                self.state.configMachine == TWO_SPINDLES_TWO_GRIPPERS
+                or self.state.configMachine == TWO_SPINDLES_ONE_GRIPPER
+            ):
+                # If we are only producing a single item we should wait for it to be finished
+                if self.state.productsToFabricate == 1:
+                    self.cobot.moveOutsideMachine()
+                    self.machine.run()
+
+                    self.machine.waitForMachineCall()
+                    self.machine.waitForDoorOpened()
+                    self.state.changePhase(
+                        PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+                # When the first raw material that was taken from the drawer
+                # is in the machine, we can immediately get another raw
+                # material from the drawer.
+                elif self.state.firstRawMaterialThatWasTakenFromDrawerIsInMachine:
+                    self.cobot.moveOutsideMachine()
+                    self.machine.run()
+
+                    self.cobot.moveFromMachineToDrawer()
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+                else:
+                    self.state.changePhase(
+                        PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+
+            elif self.state.configMachine == ONE_SPINDLE_ONE_GRIPPER:
+                self.cobot.moveOutsideMachine()
+                self.machine.run()
+
+                self.machine.waitForMachineCall()
+                self.machine.waitForDoorOpened()
+                self.state.changePhase(
+                    PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+
+            elif self.state.configMachine == ONE_SPINDLE_TWO_GRIPPERS:
+                # If we are only producing a single item we should wait for it to be finished
+                if self.state.productsToFabricate == 1:
+                    self.cobot.moveOutsideMachine()
+                    self.machine.run()
+
+                    self.machine.waitForMachineCall()
+                    self.machine.waitForDoorOpened()
+                    self.state.changePhase(
+                        PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+                elif self.state.firstRawMaterialThatWasTakenFromDrawerIsInMachine:
+                    self.cobot.moveOutsideMachine()
+                    self.machine.run()
+
+                    self.cobot.moveFromMachineToDrawer()
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+                else:
+                    self.cobot.moveOutsideMachine()
+                    self.machine.run()
+
+                    if CLEAN_PRODUCT:
+                        self.cobot.cleanProduct()
+
+                    if self.drawer.shouldPlaceFinishedProductOnSecondDrawer():
+                        self.cobot.moveFromMachineToSecondDrawer()
+                        self.state.changePhase(
+                            PLACE_FINISHED_PRODUCT_ON_DRAWER_PHASE)
+                    elif PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION:
+                        self.cobot.moveFromMachineToDropOff()
+                        self.state.changePhase(
+                            PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION_PHASE
+                        )
+                    else:
+                        self.cobot.moveFromMachineToDrawer()
+                        self.state.changePhase(
+                            PLACE_FINISHED_PRODUCT_ON_DRAWER_PHASE)
+        elif IO_MODE == INPUT:
+            self.state.incrementFabrication()
+            self.state.setState("PRODUCT_FINISHED")
+
+            self.cobot.moveOutsideMachine()
+            self.machine.run()
+
+            self.cobot.moveFromMachineToDrawer()
+
+            if self.state.productsToFabricate <= 0:
+                self.state.changePhase(EXIT_PROGRAM_PHASE)
+            elif self.state.isDrawerFinished():
+                self.cobot.moveFromDrawerToHome()
+                self.drawer.requestNewDrawer()
+                self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+            else:
+                self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+
+        self.state.firstRawMaterialThatWasTakenFromDrawerIsInMachine = False
+
+    def _forceInfeed(self, placePosBeforeClaw, placePos):
+        self.state.setState("FORCE_FEED")
+
+        tp_log(">> moving to force infeed position before claw")
+        self.cobot.movelSlow(placePosBeforeClaw, ref=DR_BASE)
+
+        self.cobot.useForce('FORCE_FEED', FORCE_FEEDING_NEWTON, placePos)
+
+        self.machine.closeMainJaw()
+        self.gripper.openGripper1()
+
+        self.cobot.movelSlow(
+            [0, 0, -10, 0, 0, 0],
+            ref=DR_TOOL,
+            mod=DR_MV_MOD_REL,
+        )
+
+        release_compliance_ctrl()
+        set_ref_coord(DR_BASE)
+
+    def _normalInfeed(self, placePos):
+        # Feed material at exact location without pushing against chuck
+        self.state.setState("NORMAL_FEED")
+
+        tp_log(">> moving to normal infeed at place position")
+        self.cobot.movelSlow(placePos, ref=DR_BASE)
+        if DEBUG.SET_TASK_COMPLIANCE_CTRL:
+            self.cobot.setCompliance()
+            set_stiffnessx([20000, 20000, 20000, 1000, 1000, 1000])
+
+        self.machine.closeMainJaw()
+        self.gripper.openGripper1()
+        if DEBUG.SET_TASK_COMPLIANCE_CTRL:
+            release_compliance_ctrl()
+
+    def _resetPlaceBits(self):
+        DO_GRIPPER1_OPEN.set(ON)
+        DO_GRIPPER1_CLOSE.set(OFF)
+        DO_MAIN_SPINDLE_OPEN.set(OFF)
+        DO_MAIN_SPINDLE_CLOSE.set(OFF)
+
+    def _pushAfterPlace(self, placePosBeforeProduct):
+        self.state.setState("PUSH_AFTER_PLACE")
+
+        if PUSH_GRIPPER_CLOSED:  # TODO: Check
+            self.state.setState("PUSH_GRIPPER_CLOSED")
+
+            set_ref_coord(DR_BASE)
+            tp_log(">> moving to place position before product")
+            self.cobot.movelSlow(placePosBeforeProduct, ref=DR_BASE)
+            self.gripper.closeGripper1()
+
+        # self.machine.openMainJaw()
+        self.cobot.useForce('PUSH_AFTER_PLACE',
+                            FORCE_PUSHING_NEWTON, placePosBeforeProduct)
+        self.machine.closeMainJaw()
+
+        movel([0, 0, -20, 0, 0, 0], vel=40.0, acc=40, mod=DR_MV_MOD_REL)
+        release_compliance_ctrl()
+        set_ref_coord(DR_BASE)
+        self.cobot.waitTime(0.2)
+
+        if PUSH_GRIPPER_CLOSED:
+            self.gripper.openGripper1()
+
+
+class PickFinishedProductFromMachine:
+    """
+    Picks the finished product from the machine.
+
+    Next: PlaceFinishedProductOnDrawer, PlaceRawMaterialInMachine, PlaceFinishedProductOnDropOffPosition
+    """
+
+    def __init__(self, state):
+        state.assignDomainHelpers(self)
+
+    def run(self):
+        if AIRPURGE_BEFORE_OUTFEED:
+            if USE_SUB_SPINDLE:
+                self.cobot.airpurge(
+                    "AIRPURGE_BEFORE_OUTFEED",
+                    SUB_CLAW_POSITION,
+                    # AIRPURGE_AT_SUB_CLAW,
+                    PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_SUB_CLAW,
+                )
+                tp_log(
+                    ">> moving from outside machine door position to pick position -> reversed PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_PICK"
+                )
+            else:
+                self.cobot.airpurge(
+                    "AIRPURGE_BEFORE_OUTFEED",
+                    MAIN_CLAW_POSITION,
+                    # AIRPURGE_AT_MAIN_CLAW,
+                    PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_MAIN_CLAW,
+                )
+
+        self.state.setState("PICK_FINISHED_PRODUCT")
+
+        self.firstRawMaterialThatWasTakenFromDrawerIsInMachine = False
+
+        tp_log(">> pick finished product from machine " +
+               self.state.getProgress())
+
+        if USE_SECOND_GRIPPER:
+            set_tcp(GRIPPER_2_TCP)
+            tp_log("Set TCP = Gripper 2 (Pickfinishedproduct)")
+        else:
+            set_tcp(GRIPPER_1_TCP)
+            tp_log("Set TCP = Gripper 1 (Pickfinishedproduct)")
+
+        if (USE_SUB_SPINDLE):
+            tp_log(
+                ">> moving from outside machine door to sub claw -> PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_SUB_CLAW"
+            )
+            path = list(PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_SUB_CLAW)
+        else:
+            tp_log(
+                ">> moving from outside machine door to main claw -> PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MAIN_CLAW"
+            )
+            path = list(PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_MAIN_CLAW)
+
+        if ((USE_SUB_SPINDLE and USE_SECOND_GRIPPER == False) or (USE_SUB_SPINDLE == False and USE_SECOND_GRIPPER)):
+            tp_log(
+                ">> Rotate tool 180 degree for tool 1 to be lined out to the sub claw"
+            )
+            positions = len(path)
+            paths = []
+            for i in range(positions):
+                tp_log("positions = " + str(positions))
+                position = posj(path[i])
+
+                if (i == 0):
+                    if (position[5] >= 0):
+                        bPositive = True
+                    else:
+                        bPositive = False
+
+                if ((positions > 1 and i != 0) or positions == 1):
+                    tp_log("i = " + str(i))
+                    if (bPositive == True):
+                        position[5] = position[5] - 180
+                    else:
+                        position[5] = position[5] + 180
+
+                    paths.append(position)
+            path = paths
+
+        self.cobot.movejPath(path)
+
+        pickPos = self._determinePickPosition()
+
+        zOffset = self._calculateZOffsetForJaw()
+
+        pickPos = trans(pickPos, [0, 0, zOffset, 0, 0, 0], DR_TOOL)
+
+        pickPos = trans(
+            pickPos, [0, 0, MACHINE_PICK_HEIGHT_OFFSET, 0, 0, 0], DR_BASE)
+        if USE_SECOND_GRIPPER:
+            pickPosArrive = trans(
+                pickPos, [0, 0, -GR2_CLAW_DEPTH - 20, 0, 0, 0], DR_TOOL)
+        else:
+            pickPosArrive = trans(
+                pickPos, [0, 0, -GR1_CLAW_DEPTH - 20, 0, 0, 0], DR_TOOL)
+
+        if USE_SUB_SPINDLE:
+            pickPosLeave = trans(
+                pickPos, [0, 0, -SUB_CLAW_DEPTH - 20, 0, 0, 0], DR_TOOL)
+        else:
+            pickPosLeave = trans(
+                pickPos, [0, 0, -MAIN_CLAW_DEPTH - 20, 0, 0, 0], DR_TOOL)
+
+        tp_log(">> moving to pick finished product from machine position arrive r10")
+        self.cobot.movelNormal(pickPosArrive, r=10, ref=DR_BASE)
+
+        if USE_SECOND_GRIPPER:
+            self.gripper.openGripper2()
+        else:
+            self.gripper.openGripper1()
+
+        tp_log(">> moving to pick finished product from machine position")
+        self.cobot.movelSlow(pickPos, ref=DR_BASE)
+
+        if DEBUG.SET_TASK_COMPLIANCE_CTRL:
+            self.cobot.setCompliance()
+            set_stiffnessx([20000, 20000, 20000, 1000, 1000, 1000])
+
+        if USE_SECOND_GRIPPER:
+            self.gripper.closeGripper2()
+        else:
+            self.gripper.closeGripper1()
+
+        if USE_SUB_SPINDLE:
+            self.machine.openSubJaw()
+        else:
+            self.machine.openMainJaw()
+
+        if DEBUG.SET_TASK_COMPLIANCE_CTRL:
+            release_compliance_ctrl()
+
+        # When we fail to pick up the finished product the program
+        # must stop immediately. It is to dangerous now to try do
+        # move the Cobot / recover from this state: we do not want
+        # to cause any possible damage to the machine. Best to let
+        # the operator fix the situation themselves.
+        if not self._isFinishedProductPickedUp():
+            DO_SEND_ALERT.set(ON)
+
+            self.state.setState("PICK_FROM_MACHINE_FAILED")
+
+            self.state.keepRunning = False
+            return
+
+        if USE_SECOND_GRIPPER:
+            self.state.gripper2Status = FINISHED
+        else:
+            self.state.gripper1Status = FINISHED
+
+        self.gripper.addFinishedProductWeight(self.product.finProductWeight)
+
+        if USE_SUB_SPINDLE:
+            self.state.subSpindleStatus = EMPTY
+        else:
+            self.state.mainSpindleStatus = EMPTY
+
+        tp_log(">> moving to pick finished product from machine position leave")
+        self.cobot.movelSlow(pickPosLeave, ref=DR_BASE)
+
+        self.state.setState("PRODUCT_PICKED_FROM_MACHINE")
+
+        self._resetPickBits()
+
+        if USE_SUB_SPINDLE:
+            tp_log(
+                ">> moving from outside machine door position to pick position -> reversed PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_PICK"
+            )
+            path = list(
+                reversed(PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_SUB_CLAW))
+        else:
+            tp_log(
+                ">> moving from outside machine door position to place position -> reversed PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_PLACE"
+            )
+            path = list(
+                reversed(PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_MAIN_CLAW))
+
+        # Programma doet een shallow copy waardoor ook PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_MACHINE_SUB_CLAW wordt overschreven dit willen we niet
+        if ((USE_SUB_SPINDLE and USE_SECOND_GRIPPER == False) or (USE_SUB_SPINDLE == False and USE_SECOND_GRIPPER)):
+            positions = len(path)
+            paths = []
+            for i in range(positions):
+                position = posj(path[i])
+                if (i == 0):
+                    if (position[5] >= 0):
+                        bPositive = True
+                    else:
+                        bPositive = False
+                if (bPositive == True):
+                    position[5] = position[5] - 180
+                else:
+                    position[5] = position[5] + 180
+
+                paths.append(position)
+            path = paths
+
+        self.cobot.movejPath(path)
+
+        if AIRPURGE_AFTER_OUTFEED:
+            if USE_SUB_SPINDLE:
+                self.cobot.airpurge(
+                    "AIRPURGE_AFTER_OUTFEED",
+                    SUB_CLAW_POSITION,
+                    # AIRPURGE_AT_SUB_CLAW,
+                    PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_SUB_CLAW,
+                )
+            elif AIRPURGE_BEFORE_INFEED == False or self.state.isFabricatingLastItemOnDrawer():
+                # Indien we geen subspindel hebben en we voor infeed blazen heeft dit geen zin dan blazen we twee keer achter elkaar op dezelfde plek!!!
+                self.cobot.airpurge(
+                    "AIRPURGE_AFTER_OUTFEED",
+                    MAIN_CLAW_POSITION,
+                    # AIRPURGE_AT_MAIN_CLAW,
+                    PATH_FROM_OUTSIDE_MACHINE_DOOR_TO_AIRPURGE_MAIN_CLAW,
+                )
+
+        if IO_MODE == INPUT_OUTPUT:
+            if (
+                self.state.configMachine == TWO_SPINDLES_TWO_GRIPPERS
+                or self.state.configMachine == TWO_SPINDLES_ONE_GRIPPER
+            ):
+                self.cobot.moveOutsideMachine()
+
+                if self.state.mainSpindleStatus == RAW:
+                    self.machine.run()
+
+                self._cleanAndMoveToPlace()
+
+            elif self.state.configMachine == ONE_SPINDLE_ONE_GRIPPER:
+                self.cobot.moveOutsideMachine()
+
+                self._cleanAndMoveToPlace()
+
+            elif self.state.configMachine == ONE_SPINDLE_TWO_GRIPPERS:
+                if self.state.isFabricatingLastItemOnDrawer():
+                    # There is no more finished products to pick up from the machine
+                    # so place it on the drawer.
+                    self.cobot.moveOutsideMachine()
+
+                    self._cleanAndMoveToPlace()
+                else:
+                    self.state.changePhase(PLACE_RAW_MATERIAL_IN_MACHINE_PHASE)
+
+        elif IO_MODE == OUTPUT:
+            self.cobot.moveOutsideMachine()
+
+            self._cleanAndMoveToPlace()
+
+    # JACCO: Wait... is this correct?
+    # TODO: DECIDE!
+    def _determinePickPosition(self):
+        # if USE_SUB_SPINDLE or USE_SECOND_GRIPPER:
+        # Leren nu 1x de Main spindle en de Sub spindle in lopen deze punten aan met ander TCP
+        if USE_SUB_SPINDLE:
+            return posx(SUB_CLAW_POSITION, ori_type=DR_ELR_ZYX)
+            # return posx(MACHINE_PICK_POSITION, ori_type=DR_ELR_ZYX)
+        else:
+            return posx(MAIN_CLAW_POSITION, ori_type=DR_ELR_ZYX)
+            # return posx(MACHINE_PLACE_POSITION, ori_type=DR_ELR_ZYX)
+
+    # TODO: Check this as well.
+    def _calculateZOffsetForJaw(self):
+        if USE_SECOND_GRIPPER:
+            grJawDepth = GR2_CLAW_DEPTH
+            grJawHeight = GR2_CLAW_HEIGHT
+            if USE_SUB_SPINDLE:
+                taughtGrJawDepth = TEACH_CONFIG_GR_FINISHED_DEPTH
+                taughtGrJawHeight = TEACH_CONFIG_GR_FINISHED_HEIGHT
+            else:
+                taughtGrJawDepth = TEACH_CONFIG_GR_RAW_DEPTH
+                taughtGrJawHeight = TEACH_CONFIG_GR_RAW_HEIGHT
+        else:
+            grJawDepth = GR1_CLAW_DEPTH
+            grJawHeight = GR1_CLAW_HEIGHT
+            taughtGrJawDepth = TEACH_CONFIG_GR_RAW_DEPTH
+            taughtGrJawHeight = TEACH_CONFIG_GR_RAW_HEIGHT
+
+        if USE_SUB_SPINDLE:
+            spindleJawDepth = SUB_CLAW_DEPTH
+            spindleJawHeight = SUB_CLAW_HEIGHT
+            taughtSpindleJawDepth = TEACH_CONFIG_PICK_SPINDLE_DEPTH
+            taughtSpindleJawHeight = TEACH_CONFIG_PICK_SPINDLE_HEIGHT
+            taughtProductHeight = TEACH_CONFIG_SUB_CLAW_PRODUCT_HEIGHT
+
+        else:
+            spindleJawDepth = MAIN_CLAW_DEPTH
+            spindleJawHeight = MAIN_CLAW_HEIGHT
+            taughtSpindleJawDepth = TEACH_CONFIG_PLACE_SPINDLE_DEPTH
+            taughtSpindleJawHeight = TEACH_CONFIG_PLACE_SPINDLE_HEIGHT
+            taughtProductHeight = TEACH_CONFIG_MAIN_CLAW_PRODUCT_HEIGHT
+
+        offset = (
+            -MACHINE_PICK_DEPTH_OFFSET
+            - FIN_PRODUCT_HEIGHT
+            + taughtProductHeight
+            + FIN_TOP_OFFSET
+            + FIN_BOTTOM_OFFSET
+            + spindleJawDepth
+            - taughtSpindleJawDepth
+            - spindleJawHeight
+            + taughtSpindleJawHeight
+            + grJawDepth
+            - taughtGrJawDepth
+            - grJawHeight
+            + taughtGrJawHeight
+        )
+
+        return offset
+
+    def _resetPickBits(self):
+        DO_GRIPPER2_OPEN.set(OFF)
+        DO_GRIPPER2_CLOSE.set(ON)
+        DO_SUB_SPINDLE_OPEN.set(OFF)
+        DO_SUB_SPINDLE_CLOSE.set(OFF)
+
+    def _isFinishedProductPickedUp(self):
+        if DEBUG.CHECK_IF_COBOT_HAS_FEEDBACK_ON_PICK == False:
+            return True
+
+        if USE_SECOND_GRIPPER:
+            return self.gripper.isGripper2Holding()
+        else:
+            return self.gripper.isGripper1Holding()
+
+    def _cleanAndMoveToPlace(self):
+        if CLEAN_PRODUCT:
+            self.cobot.cleanProduct()
+
+        if self.drawer.shouldPlaceFinishedProductOnSecondDrawer():
+
+            # Is the second drawer full at this moment?
+            if (
+                self.state.productsPlacedOnCurrentDrawer
+                == MAX_AMOUNT_PRODUCT_ON_SECOND_DRAWER
+            ):
+                # Then request that the second drawer is cleared by the operator
+
+                self.state.setState("SECOND_DRAWER_IS_FULL")
+                if DEBUG.USE_PYTHON_MODE:
+                    result = tp_get_user_input(
+                        "Haal de tweede lade leeg en druk op (True) om verder te gaan, of (False) wanneer je wilt stoppen?",
+                        input_type=DR_VAR_BOOL,
+                    )
+                else:
+                    result = tp_get_user_input(
+                        "CLEAR_SECOND_DRAWER",
+                        input_type=DR_VAR_BOOL,
+                    )
+
+                # When result is `True` the drawer was cleared by the operator
+                if result:
+                    self.drawer.initSpotsForSecondDrawer()
+                    # Reset the place variables
+
+                    self.state.productsPlacedOnCurrentDrawer = 0
+
+                    self.state.xPlace = 0
+                    self.state.yPlace = 0
+                    self.state.zPlace = 0
+
+                    self.state.setState("SECOND_DRAWER_IS_CLEARED")
+                else:
+                    # Quit the program if the operator wants to stop the program instead,
+                    # one of the grippers will hold a finished product!
+
+                    self.cobot.moveFromMachineToDrawer()
+                    self.state.changePhase(EXIT_PROGRAM_PHASE)
+                    return
+
+            self.cobot.moveFromMachineToSecondDrawer()
+            self.state.changePhase(PLACE_FINISHED_PRODUCT_ON_DRAWER_PHASE)
+        elif PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION:
+            self.cobot.moveFromMachineToDropOff()
+            self.state.changePhase(
+                PLACE_FINISHED_PRODUCT_ON_DROP_OFF_POSITION_PHASE)
+        else:
+            self.cobot.moveFromMachineToDrawer()
+            self.state.changePhase(PLACE_FINISHED_PRODUCT_ON_DRAWER_PHASE)
+
+
+class PlaceFinishedProductOnDrawer:
+    """
+    Places finished product on drawer.
+
+    Next: ExitProgram, PickFinishedProductFromMachine, PickRawMaterialFromDrawer
+    """
+
+    def __init__(self, state):
+        state.assignDomainHelpers(self)
+
+    def run(self):
+        self.state.setState("PLACE_FINISHED_PRODUCT")
+
+        tp_log(">> place finished product on drawer " + self.state.getProgress())
+
+        if USE_SECOND_GRIPPER:
+            set_tcp(GRIPPER_2_TCP)
+            tp_log("Set TCP = Gripper 2 (PlaceFinishedProductOnDrawer)")
+
+            if self.drawer.shouldPlaceFinishedProductOnSecondDrawer():
+                tp_log(">> move gripper 2 to second drawer")
+                self.cobot.movejHigh(GRIPPER2_AT_SECOND_DRAWER_POSITION)
+            else:
+                tp_log(">> move gripper 2 to drawer")
+                self.cobot.movejHigh(GRIPPER2_AT_DRAWER_POSITION)
+        else:
+            set_tcp(GRIPPER_1_TCP)
+            tp_log("Set TCP = Gripper 1 (PlaceFinishedProductOnDrawer)")
+
+            if self.drawer.shouldPlaceFinishedProductOnSecondDrawer():
+                tp_log(">> move gripper 1 to second drawer")
+                self.cobot.movejHigh(GRIPPER1_AT_SECOND_DRAWER_POSITION)
+            else:
+                tp_log(">> move gripper 1 to drawer")
+                self.cobot.movejHigh(GRIPPER1_AT_DRAWER_POSITION)
+
+        placePos = None
+
+        # determine co-ordinates and plane for them
+        if GRID_TYPE == STATIC:
+            # Jacco: For some reason, the decision to place on the static grid
+            # is not a parameter, but it is used INSIDE calculateStaticGridPosition.
+
+            # Maarten answer: this is because pinned grid support was put on hold,
+            # the static grid is unit / integration tested, by separating the paths
+            # the pinned grid code does not affect any tests. In the future
+            # when we start working in the pinned grid and it has tests, they
+            # can be integrated.
+            placePos = self.drawer.nextPlacePosition()
+            if self.drawer.shouldPlaceFinishedProductOnSecondDrawer():
+                drawerPlane = SECOND_DRAWER_COORDINATE_SYSTEM
+            else:
+                drawerPlane = DRAWER_COORDINATE_SYSTEM
+        else:  # GRID_TYPE == PINNED
+            # Maarten: I'm not so sure about the following code
+            placePos = self.drawer.calculatePinnedGridPosition(
+                False,
+                FIN_PRODUCT_HEIGHT,
+                FIN_PRODUCT_DIAMETER,
+                FIN_PRODUCT_LENGTH,
+                FIN_PRODUCT_WIDTH,
+                self.state.xPlace,
+                self.state.yPlace,
+                self.state.zPlace,
+                DRAWER_PLACE_OFFSET_X,
+                DRAWER_PLACE_OFFSET_Y,
+                DRAWER_PLACE_OFFSET_Z,
+            )
+            if DISTANCE_POSITIONING_PINS <= 50:
+                placePos = trans(placePos, [0, 0, 0, 0, 0, 60], DR_TOOL)
+
+            if FEEDER_TYPE == PRO_FEEDER:
+                drawerPlane = drawer + 100
+            else:
+                drawerPlane = 101
+
+        zArriveOffset = (DRAWER_AMOUNT_PRODUCT_Z * RAW_MAT_HEIGHT) + 50
+
+        if zArriveOffset < 100:
+            zArriveOffset = 100
+
+        placePosArrive = trans(
+            placePos,
+            [0, 0, zArriveOffset, 0, 0, 0],
+            ref=DRAWER_COORDINATE_SYSTEM,
+            ref_out=DRAWER_COORDINATE_SYSTEM,
+        )
+        placePosLeave = posx(placePosArrive)
+
+        tp_log(">> move to place position arrive")
+        self.cobot.movelNormal(placePosArrive, ref=drawerPlane)
+        self.state.setState("PLACE_PRODUCT_DRAWER")
+        self.cobot.movelSlow(placePos, ref=drawerPlane)
+
+        if USE_SECOND_GRIPPER:
+            self.gripper.openGripper2()
+            self.state.gripper2Status = EMPTY
+        else:
+            self.gripper.openGripper1()
+            self.state.gripper1Status = EMPTY
+
+        self.gripper.removeFinishedProductWeight(self.product.finProductWeight)
+
+        self._incrementPlacePosition()
+        self.state.setState("PRODUCT_PLACED_ON_DRAWER")
+
+        tp_log(">> move to place position leave")
+        self.cobot.movelNormal(placePosLeave, ref=drawerPlane)
+
+        self.state.incrementFabrication()
+
+        self.state.setState("PRODUCT_FINISHED")
+
+        if IO_MODE == INPUT_OUTPUT:
+            if self.state.configMachine == ONE_SPINDLE_ONE_GRIPPER:
+                if self.state.productsToFabricate <= 0:
+                    self.state.changePhase(EXIT_PROGRAM_PHASE)
+                elif self.state.isDrawerFinished():
+                    self.cobot.moveFromDrawerToHome()
+                    self.drawer.requestNewDrawer()
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+                else:
+                    if self.drawer.shouldPlaceFinishedProductOnSecondDrawer():
+                        self.cobot.moveFromSecondDrawerToMachine()
+                        self.cobot.moveFromMachineToDrawer()
+
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+
+            elif (
+                self.state.configMachine == ONE_SPINDLE_TWO_GRIPPERS
+                or self.state.configMachine == TWO_SPINDLES_ONE_GRIPPER
+                or self.state.configMachine == TWO_SPINDLES_TWO_GRIPPERS
+            ):
+                if self.state.productsToFabricate <= 0:
+                    self.state.changePhase(EXIT_PROGRAM_PHASE)
+                elif self.state.isFabricatingLastItemOnDrawer():
+                    # There is no more product to pick up on the current drawer
+                    # wait for the machine and place the last product on drawer.
+                    self.machine.waitForMachineCall()
+
+                    if self.drawer.shouldPlaceFinishedProductOnSecondDrawer():
+                        self.cobot.moveFromSecondDrawerToMachine()
+                    else:
+                        self.cobot.moveFromDrawerToMachine()
+
+                    self.machine.waitForDoorOpened()
+                    self.state.changePhase(
+                        PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+                elif self.state.isDrawerFinished():
+                    self.cobot.moveFromDrawerToHome()
+                    self.drawer.requestNewDrawer()
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+                else:
+                    if self.drawer.shouldPlaceFinishedProductOnSecondDrawer():
+                        self.cobot.moveFromSecondDrawerToMachine()
+                        self.cobot.moveFromMachineToDrawer()
+
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+
+        elif IO_MODE == OUTPUT:
+            if self.state.productsToFabricate <= 0:
+                self.state.changePhase(EXIT_PROGRAM_PHASE)
+            elif self.state.isDrawerFinished():
+                self.cobot.moveFromDrawerToHome()
+                self.drawer.requestNewDrawer()
+
+                self.machine.waitForMachineCall()
+
+                if self.drawer.shouldPlaceFinishedProductOnSecondDrawer():
+                    self.cobot.moveFromSecondDrawerToMachine()
+                else:
+                    self.cobot.moveFromDrawerToMachine()
+
+                self.machine.waitForDoorOpened()
+                self.state.changePhase(
+                    PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+            else:
+                self.machine.waitForMachineCall()
+
+                if self.drawer.shouldPlaceFinishedProductOnSecondDrawer():
+                    self.cobot.moveFromSecondDrawerToMachine()
+                else:
+                    self.cobot.moveFromDrawerToMachine()
+
+                self.machine.waitForDoorOpened()
+                self.state.changePhase(
+                    PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+
+    def _incrementPlacePosition(self):
+        tp_log(">> incrementing place positions and counters")
+
+        self.state.productsPlacedOnCurrentDrawer += 1
+
+        tp_log(
+            ">>> inc productsPlacedOnCurrentDrawer: "
+            + str(self.state.productsPlacedOnCurrentDrawer)
+        )
+
+        self.state.zPlace += 1
+
+        if self.state.zPlace >= DRAWER_AMOUNT_PRODUCT_Z:
+            self.state.zPlace = 0
+            self.state.xPlace += 1
+
+        # Equal grid is a grid where the products are all in line unEqual grid(EQUAL_GRID == false) the uneven rows are half way of the grid offset.
+        if EQUAL_GRID == False and self.state.yPlace % 2 == 1:
+            if self.state.xPlace >= DRAWER_AMOUNT_PRODUCT_X - 1:
+                self.state.xPlace = 0
+                self.state.yPlace += 1
+        else:
+            if self.state.xPlace >= DRAWER_AMOUNT_PRODUCT_X:
+                self.state.xPlace = 0
+                self.state.yPlace += 1
+
+        if self.state.yPlace == DRAWER_AMOUNT_PRODUCT_Y:
+            self.state.yPlace = 0
+
+        tp_log(
+            ">>> inc place { x: "
+            + str(self.state.xPlace)
+            + ", y: "
+            + str(self.state.yPlace)
+            + ", z: "
+            + str(self.state.zPlace)
+            + " }"
+        )
+
+
+class PlaceFinishedProductOnDropOffPosition:
+    """
+    Places finished product on drop off position.
+
+    Next: ExitProgram, PickFinishedProductFromMachine, PickRawMaterialFromDrawer
+    """
+
+    def __init__(self, state):
+        state.assignDomainHelpers(self)
+
+    def run(self):
+        self.state.setState("PLACE_FINISHED_PRODUCT")
+
+        tp_log(
+            ">> place finished product on drop off point " + self.state.getProgress()
+        )
+
+        if USE_SECOND_GRIPPER:
+            set_tcp(GRIPPER_2_TCP)
+            tp_log("Set TCP = Gripper 2 (PlaceFinishedProductOnDroppOff)")
+        else:
+            set_tcp(GRIPPER_1_TCP)
+            tp_log("Set TCP = Gripper 1 (PlaceFinishedProductOnDroppOff)")
+
+        self.cobot.movelNormal(DROP_OFF_POSITION)
+
+        if USE_SECOND_GRIPPER:
+            self.gripper.openGripper2()
+            self.state.gripper2Status = EMPTY
+        else:
+            self.gripper.openGripper1()
+            self.state.gripper1Status = EMPTY
+
+        self.gripper.removeFinishedProductWeight(self.product.finProductWeight)
+
+        self.state.productsDroppedOnDropOff += 1
+        self.state.setState("PRODUCT_PLACED_ON_DROP_OFF")
+
+        self.state.incrementFabrication()
+
+        # Send PRODUCT_FINISHED and wait since this tp_log is critical
+        self.state.setState("PRODUCT_FINISHED")
+        wait(1)
+
+        if IO_MODE == INPUT_OUTPUT:
+            if self.state.configMachine == ONE_SPINDLE_ONE_GRIPPER:
+                if self.state.productsToFabricate <= 0:
+                    self.cobot.moveFromDropOffToMachine()
+                    self.cobot.moveFromMachineToDrawer()
+
+                    self.state.changePhase(EXIT_PROGRAM_PHASE)
+                elif self.state.isDrawerFinished():
+                    self.cobot.moveFromDropOffToMachine()
+                    self.cobot.moveFromMachineToDrawer()
+                    self.cobot.moveFromDrawerToHome()
+
+                    self.drawer.requestNewDrawer()
+
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+                else:
+                    self.cobot.moveFromDropOffToMachine()
+                    self.cobot.moveFromMachineToDrawer()
+
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+
+            elif (
+                self.state.configMachine == ONE_SPINDLE_TWO_GRIPPERS
+                or self.state.configMachine == TWO_SPINDLES_ONE_GRIPPER
+                or self.state.configMachine == TWO_SPINDLES_TWO_GRIPPERS
+            ):
+                if self.state.productsToFabricate <= 0:
+                    self.cobot.moveFromDropOffToMachine()
+                    self.cobot.moveFromMachineToDrawer()
+
+                    self.state.changePhase(EXIT_PROGRAM_PHASE)
+                elif self.state.isFabricatingLastItemOnDrawer():
+                    # There is no more product to pick up on the current drawer
+                    # wait for the machine and place the last product on drawer.
+                    self.machine.waitForMachineCall()
+
+                    self.cobot.moveFromDropOffToMachine()
+
+                    self.machine.waitForDoorOpened()
+                    self.state.changePhase(
+                        PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+                elif self.state.isDrawerFinished():
+                    self.cobot.moveFromDropOffToMachine()
+                    self.cobot.moveFromMachineToDrawer()
+                    self.cobot.moveFromDrawerToHome()
+
+                    self.drawer.requestNewDrawer()
+
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+                else:
+                    self.cobot.moveFromDropOffToMachine()
+                    self.cobot.moveFromMachineToDrawer()
+
+                    self.state.changePhase(PICK_RAW_MATERIAL_FROM_DRAWER_PHASE)
+
+        elif IO_MODE == OUTPUT:
+            if self.state.productsToFabricate <= 0:
+                self.cobot.moveFromDropOffToMachine()
+                self.cobot.moveFromMachineToDrawer()
+
+                self.state.changePhase(EXIT_PROGRAM_PHASE)
+            else:
+                self.machine.waitForMachineCall()
+
+                self.cobot.moveFromDropOffToMachine()
+
+                self.machine.waitForDoorOpened()
+                self.state.changePhase(
+                    PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE)
+
+
+class ReachTest:
+    """
+    Checks if all pick positions can be reached, acts as a separate
+    program from the rest of the meta tending application.
+
+    IMPORTANT: we do not consider PINNED grids yet!
+    """
+
+    def __init__(self, state):
+        state.assignDomainHelpers(self)
+
+    def run(self):
+        self.state.setState("REACH_TEST")
+
+        # When using OUTPUT none of the spots are filled with RAW
+        # materials this is not necessary for checking the
+        # reachability of a spot. Simply makes initSpots a little
+        # faster.
+        global IO_MODE
+        IO_MODE = OUTPUT
+
+        self.drawer.initSpots()
+
+        if REACH_DRAWER == "MAIN":
+            spots = self.drawer.mainDrawerSpots
+            ref = DRAWER_COORDINATE_SYSTEM
+
+        else:
+            spots = self.drawer.secondDrawerSpots
+            ref = SECOND_DRAWER_COORDINATE_SYSTEM
+
+        number_of_spots = len(spots)
+        reachable = [True] * number_of_spots
+
+        # check pick positions
+        if REACH_DRAWER == "MAIN":
+            set_tcp(GRIPPER_1_TCP)
+            for i in range(number_of_spots):
+                spot = spots[i]
+                for position in spot.positions:
+                    # Do not test pick positions for the second drawer
+                    # as we only place on the second drawer
+                    if REACH_DRAWER == "MAIN" and reachable[i]:
+                        pickPos = self.drawer.calculateStaticGridPosition(
+                            pick=True, patternPointIndex=position.index
+                        )
+
+                        if not self._isReachable(pickPos, ref):
+                            reachable[i] = False
+
+                self._sendMessage(
+                    "PROGRESS: PICK {0} / {1}".format(i + 1, number_of_spots))
+
+        # check place positions
+        if HAS_SECOND_GRIPPER and USE_SECOND_GRIPPER:
+            set_tcp(GRIPPER_2_TCP)
+            tp_log("Set TCP = Gripper 2 (ReachTest)")
+        else:
+            set_tcp(GRIPPER_1_TCP)
+            tp_log("Set TCP = Gripper 1 (ReachTest)")
+
+        for i in range(number_of_spots):
+            if reachable[i]:
+                spot = spots[i]
+                for position in spot.positions:
+                    placePos = self.drawer.calculateStaticGridPosition(
+                        pick=False, patternPointIndex=position.index
+                    )
+
+                if not self._isReachable(placePos, ref):
+                    reachable[i] = False
+
+            self._sendMessage(
+                "PROGRESS: PLACE {0} / {1}".format(i + 1, number_of_spots))
+
+            validity = "VALID" if reachable[i] else "INVALID"
+
+            # React is picking up the tp_get_user_input up to determine
+            # which indexes are valid.
+            self._sendMessage("REACHABLE: {0} {1}".format(
+                spots[i].index, validity))
+
+        self.state.setState("REACH_TEST_FINISHED")
+
+        self.state.keepRunning = False
+
+    def _isReachable(self, posX, ref):
+        posX1 = coord_transform(posX, ref, DR_BASE, DR_ELR_ZYX)
+
+        posJ, status = ikin_norm(
+            posX1, ref=DR_BASE, ref_pos_opt=0, sol_space=2)
+
+        if status == 1:
+            tp_log(">> posx{0} is out of workspace".format(posX1))
+            return False
+        else:
+            if (
+                self._inJointLimit(posJ[0], 360, "J1")
+                and self._inJointLimit(posJ[1], 95, "J2")
+                and self._inJointLimit(posJ[2], 160, "J3")
+                and self._inJointLimit(posJ[3], 360, "J4")
+                and self._inJointLimit(posJ[4], 360, "J5")
+                and self._inJointLimit(posJ[5], 360, "J6")
+            ) == False:
+                tp_log(">> posj{0} is out of joint limits".format(posJ))
+                return False
+        if (
+            status == 2
+        ):  # JACCO: We are now just moving through singularity, but it's still good to log a singularity being there.
+            tp_log(">> posx{0} is in singularity region".format(posX1))
+        return True
+
+    def _inJointLimit(self, value, limit, joint):
+        # ikin() can under certain circumstances return a six number
+        # array containing the nan (not a number) value. The cause
+        # seems a mis match between cobot and drawer teach positions.
+        # When nan is encountered we consider the value out of limit.
+        if math.isnan(value):
+            tp_log(">> NaN detected in {0}".format(joint))
+            return False
+
+        return -limit < value < limit
+
+    def _sendMessage(self, message):
+        tp_log(message)
+        tp_get_user_input(message, input_type=DR_VAR_STR)
+# endregion phases
+
+
+# region speed
+# SPEED UTILITIES
+
+
+# Utilities for defining speed constants.
+class SpeedProps:
+    def __init__(self, ACC, SPEED):
+        self.ACC = ACC
+        self.SPEED = SPEED
+
+
+class SpeedConfig:
+    def __init__(self, SLOW, NORMAL, HIGH):
+        self.SLOW = SLOW
+        self.NORMAL = NORMAL
+        self.HIGH = HIGH
+
+
+JOINT = SpeedConfig(
+    SLOW=SpeedProps(SPEED=25, ACC=25),
+    NORMAL=SpeedProps(SPEED=55, ACC=55),
+    HIGH=SpeedProps(SPEED=70, ACC=70),
+)
+
+TASK = SpeedConfig(
+    SLOW=SpeedProps(SPEED=100, ACC=100),
+    NORMAL=SpeedProps(SPEED=500, ACC=500),
+    HIGH=SpeedProps(SPEED=1000, ACC=1000),
+)
+# endregion
+
+# BOOT
+
+programState = ProgramState()
+
+# Skip boot on the initial run of the unit tests
+if "app_data" not in locals() or app_data != "unittest-initial-run":
+
+    # Kick off the program
+    programState.productsToFabricate = TOTAL_AMOUNT_PRODUCTS
+
+    programState.run()
