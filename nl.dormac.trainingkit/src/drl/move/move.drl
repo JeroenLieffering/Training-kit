@@ -1,0 +1,25 @@
+
+import json
+
+set_singular_handling(mode=DR_AVOID)
+
+if 'app_data' not in locals():
+    exit
+
+data = json.loads(app_data)
+
+POSITIONS = json.loads(data['POSITIONS'])
+MODE = data['MODE']  # TASK | JOINT
+
+index = 0
+for index, position in enumerate(POSITIONS):
+    # Let React know which position is currently being moved to
+    tp_get_user_input(str(index), DR_VAR_STR)
+    if MODE == 'TASK':
+        actualPos = posx(position, ori_type=DR_ELR_ZYX)
+        movel(actualPos, v=150, a=150)
+    else:
+        movej(position, v=30, a=30)
+
+# Let React know the animation was finished
+tp_get_user_input("FINISHED", DR_VAR_STR);
