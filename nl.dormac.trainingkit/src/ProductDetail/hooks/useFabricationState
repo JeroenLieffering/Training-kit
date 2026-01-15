@@ -1,0 +1,132 @@
+import { useRef, useState } from 'react';
+import { CobotConfig } from '../../core/models/cobot-config-types';
+import { Product } from '../../core/models/product-types';
+import { isConfiguredWithStaticEasyLoaderWithSecondDrawer } from '../../core/services/cobot-config-service';
+import {
+  calculateTotalProducts,
+  Drawer,
+} from '../../core/services/drawer-service';
+import {
+  MetaSuiteProgramJSON,
+  MetaSuiteProgramPhase,
+} from '../../drl/main/types';
+import { FabricationState } from '../types';
+
+export function useFabricationState(
+  cobotConfig: CobotConfig,
+  product: Product,
+) {
+  const userAmountRef = useRef<number | null>(null);
+  const [fabricationState, setFabricationState] = useState<FabricationState>(
+    () => {
+      return cleanSlate();
+    },
+  );
+
+  function cleanSlate(): FabricationState {
+    const amount = calculateAmount();
+
+    return {
+      phase: 'CONFIGURE_MACHINE_PHASE',
+      amount: amount,
+      productsToFabricate: amount,
+      amountBeforeStop: amount,
+      productsPlacedOnCurrentDrawer: 0,
+      productsPickedOnCurrentDrawer: 0,
+      productsFabricatedOnCurrentDrawer: 0,
+      totalProductsFabricated: 0,
+      drawerCount: 0,
+      pickupFails: 0,
+      onStatusReceived,
+      userChangedAmount,
+      startFabrication,
+      resumeFabrication,
+      onStop,
+      resetState,
+      activeDrawer: 'MAIN',
+      gripper1Status: 0,
+      gripper2Status: 0,
+      mainSpindleStatus: 0,
+      subSpindleStatus: 0,
+    };
+  }
+
+  function calculateAmount() {
+    if (userAmountRef.current) {
+      return userAmountRef.current;
+    }
+
+    const max = calculateTotalProducts(cobotConfig, product);
+
+    const amount = product.lastFabricationAmount
+      ? Math.min(max, product.lastFabricationAmount)
+      : max;
+
+    return amount;
+  }
+
+  function onStatusReceived(json: MetaSuiteProgramJSON) {
+    setFabricationState((state) => ({
+      ...state,
+      ...json,
+      activeDrawer: determineActiveDrawer(json.phase),
+    }));
+  }
+
+  function determineActiveDrawer(phase: MetaSuiteProgramPhase): Drawer {
+    if (
+      isConfiguredWithStaticEasyLoaderWithSecondDrawer(cobotConfig) &&
+      product.config.PLACE_FINISHED_PRODUCT_ON_SECOND_DRAWER &&
+      (product.config.IO_MODE === 'OUTPUT' ||
+        phase === 'PLACE_FINISHED_PRODUCT_ON_DRAWER_PHASE' ||
+        phase === 'PICK_FINISHED_PRODUCT_FROM_MACHINE_PHASE')
+    ) {
+      return 'SECOND';
+    }
+
+    return 'MAIN';
+  }
+
+  function userChangedAmount(newAmount: number) {
+    userAmountRef.current = newAmount;
+
+    setFabricationState((state) => {
+      state.amount = newAmount;
+      state.productsToFabricate = newAmount;
+      state.productsPlacedOnCurrentDrawer = 0;
+      state.productsPickedOnCurrentDrawer = 0;
+      state.drawerCount = 0;
+
+      return { ...state };
+    });
+  }
+
+  function startFabrication(amountToFabricate: number) {
+    const state = cleanSlate();
+    state.amount = amountToFabricate;
+    state.productsToFabricate = amountToFabricate;
+    state.amountBeforeStop = amountToFabricate;
+
+    setFabricationState(state);
+  }
+
+  function resumeFabrication(amountToFabricate: number) {
+    setFabricationState((state) => {
+      fabricationState.productsToFabricate = amountToFabricate;
+
+      return { ...state };
+    });
+  }
+
+  function onStop() {
+    setFabricationState((state) => {
+      return { ...state, productsToFabricate: 0 };
+    });
+  }
+
+  function resetState() {
+    setFabricationState(() => cleanSlate());
+  }
+
+  return fabricationState;
+}
