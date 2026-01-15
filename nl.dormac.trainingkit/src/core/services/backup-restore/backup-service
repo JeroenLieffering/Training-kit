@@ -1,0 +1,108 @@
+import { IDartDatabase } from 'dart-api';
+import { padZero } from '../../../utils/string';
+import { Fabrication } from '../../models/fabrication-type';
+import { ProductHistory } from '../../models/product-types';
+import {
+  loadCobotConfig,
+  loadCobotConfigHistory,
+} from '../cobot-config-service';
+import { loadFabricationsForProduct } from '../fabrication-service';
+import {
+  loadProducts,
+  loadProductsConfigHistoryById,
+} from '../product-service';
+import { BackupRestoreListeners } from './types';
+
+export type BackupType = 'full' | 'partial';
+
+export async function getBackupData(
+  database: IDartDatabase,
+  backupType: BackupType,
+  listeners: BackupRestoreListeners,
+) {
+  if (backupType === 'full') {
+    return await getFullExport(database, listeners);
+  } else {
+    return await getPartialExport(database, listeners);
+  }
+}
+
+async function getFullExport(
+  database: IDartDatabase,
+  { setCurrentProduct, setTotalProducts }: BackupRestoreListeners,
+) {
+  const { products, cobotConfig } = await getPartialExport(database, {
+    setCurrentProduct,
+    setTotalProducts,
+  });
+
+  setTotalProducts(products.length);
+
+  const fabrications: Record<string, Fabrication[]> = {};
+  const productHistories: Record<string, ProductHistory[]> = {};
+
+  let no = 1;
+  for (const product of products) {
+    setCurrentProduct(no);
+
+    const productFabrications = await loadFabricationsForProduct(
+      database,
+      product,
+    );
+    fabrications[product.id] = productFabrications;
+
+    productHistories[product.id] = await loadProductsConfigHistoryById(
+      database,
+      product,
+    );
+
+    no += 1;
+  }
+
+  const cobotConfigHistory = await loadCobotConfigHistory(database);
+
+  return {
+    products,
+    cobotConfig,
+    fabrications,
+    cobotConfigHistory,
+    productHistories,
+  } as const;
+}
+
+async function getPartialExport(
+  database: IDartDatabase,
+  { setCurrentProduct, setTotalProducts }: BackupRestoreListeners,
+) {
+  const result = await getProductsAndConfig(database);
+
+  const total = result.products.length;
+
+  setTotalProducts(total);
+  setCurrentProduct(total);
+
+  return result;
+}
+
+async function getProductsAndConfig(database: IDartDatabase) {
+  const cobotConfig = await loadCobotConfig(database);
+  const products = await loadProducts(database);
+
+  return { cobotConfig, products } as const;
+}
+
+export function getBackupFilename(backupType: BackupType) {
+  const date = new Date();
+
+  const year = date.getFullYear();
+
+  const [month, day, hour, minute, second] = [
+    date.getMonth(),
+    date.getDate(),
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+  ].map(padZero);
+
+  return `MetaSuite-${backupType}-${year}-${month}-${day}-${hour}${minute}${second}.json`;
+}
